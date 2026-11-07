@@ -1,0 +1,53 @@
+<form action="/rating{{ if .ID }}/{{ .ID }} {{- end }}" method="post" xmlns="http://www.w3.org/1999/html">
+    <div class="form-group row">
+        <legend class="col-form-label col-sm-2 pt-0">Type</legend>
+        <div class="col-sm-5">
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="type" id="type" value="movie" {{ if eq .Type "movie" "" }}checked{{ end }}>
+                <label class="form-check-label" for="type">
+                    Movie
+                </label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="type" id="type" value="tv" {{ if eq .Type "tv" }}checked{{ end }}>
+                <label class="form-check-label" for="type">
+                    TV
+                </label>
+            </div>
+        </div>
+    </div>
+    <div class="form-group row">
+        <label for="tmdb_id" class="col-sm-2 col-form-label">TMDB ID</label>
+        <div class="col-sm-5">
+            <input name="tmdb_id" class="form-control" id="tmdb_id" type="text" value="{{ if .TMDBID }}{{ .TMDBID }}{{ end }}"/>
+        </div>
+    </div>
+    <div class="form-group row">
+        <label for="name" class="col-sm-2 col-form-label">Name</label>
+        <div class="col-sm-5">
+            <input id="name" name="name" class="form-control" type="text" value="{{ .Name }}"/><br>
+        </div>
+    </div>
+    <div class="form-group row">
+        <label for="year" class="col-sm-2 col-form-label">Year</label>
+        <div class="col-sm-5">
+            <input id="year" name="year" class="form-control" type="text" value="{{ if .Year }}{{ .Year }}{{ end }}"/><br>
+        </div>
+    </div>
+    <div class="form-group row">
+        <label for="rating" class="col-sm-2 col-form-label">Rating</label>
+        <div class="col-sm-5">
+            <input id="rating" name="rating" class="form-control" type="text" value="{{ if .Rating }}{{ .Rating }}{{ end }}"/><br>
+        </div>
+    </div>
+    <div class="form-group row">
+        <label for="comment" class="col-sm-2 col-form-label">Comment</label>
+        <div class="col-sm-5">
+            <textarea id="comment" name="comment" class="form-control">{{ if .Comment }}{{ .Comment }}{{ end }}</textarea>
+        </div>
+    </div>
+
+    <br>
+    <button type="submit" class="btn btn-primary">Save</button>
+    <button type="submit" class="btn btn-danger" name="delete" value="Delete">Delete</button>
+</form>

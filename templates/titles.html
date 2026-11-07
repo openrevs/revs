@@ -1,0 +1,26 @@
+<br /><br />
+<ul>
+  <form method="get" action="/titles">
+    <input type="text" name="q" />
+    <input type="submit" />
+  </form>
+  {{ range $title := . }}
+  <h3>
+    <a href="/titles/{{ $title.Title.ID }}"
+      >{{ $title.Title.Name }} ({{ $title.Title.Year }})</a
+    >
+  </h3>
+  {{ if $title.Title.TMDBPosterURL }}
+  <a href="https://image.tmdb.org/t/p/original/{{ $title.Title.TMDBPosterURL }}"
+    ><img
+      src="https://image.tmdb.org/t/p/w500/{{ $title.Title.TMDBPosterURL }}"
+      height="100px"
+      alt="" /></a
+  ><br />
+  {{ end }} Average Rating: {{ $title.AvgRating }}
+  <br />
+  Rating Count: {{ $title.RatingCount }}
+  <br />
+  <br />
+  {{ end }}
+</ul>

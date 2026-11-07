@@ -1,0 +1,34 @@
+<br /><br />
+<a href="/add">Add</a>
+<table class="table">
+  <tbody>
+    {{ range $rating := .ratings }}
+    <tr>
+      <td>
+        <a href="/rating/{{ $rating.ID }}"
+          >{{ $rating.Title.Name }}{{ if $rating.Title.Year}} ({{
+          $rating.Title.Year }}){{ end }}</a
+        ><br />
+
+        {{ if $.showPosters }} {{ if $rating.Title.TMDBPosterURL }}
+        <a
+          href="https://image.tmdb.org/t/p/original/{{ $rating.Title.TMDBPosterURL }}"
+          ><img
+            src="https://image.tmdb.org/t/p/w500/{{ $rating.Title.TMDBPosterURL }}"
+            height="100px"
+            alt=""
+        /></a>
+        {{ end }} {{ end }}
+      </td>
+      <td>
+        {{ if $rating.Date }} {{ $rating.Date.Format "2006-01-02" }} {{ end }}
+      </td>
+      <td>
+        {{ if $rating.Rating }} {{ $rating.Rating }} {{ else }} --- {{ end }}
+      </td>
+    </tr>
+
+    {{/* {{ if $rating.Comment }}*/}} {{/* Comment: {{ $rating.Comment }}<br />*/}}
+    {{/* {{ end }}*/}} {{ end }}
+  </tbody>
+</table>

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS "app_data"
+(
+    "key" TEXT PRIMARY KEY NOT NULL,
+    "value" TEXT NOT NULL
+);

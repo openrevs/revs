@@ -1,0 +1,5 @@
+{"id":"abc123","max_rating":5,"min_rating":0}
+{"name":"Ghostbusters","refs":{"imdb":"tt0087332","tmdb":"123"},"year":1984}
+{"name":"Pulp Fiction","reviews":[{"comment":"Great movie!","date":"1999-03-24","rating":5},{"comment":"This is a multi-line review.\nIt's pretty cool.\n","date":"2023-03-24","rating":4}],"year":1994}
+{"name":"Rocky Balboa","refs":{"imdb_id":"tt0479143"},"reviews":[{"comment":"Mildly enjoyable, mainly because of the nostalgia factor (which the film leans into explicity). The production was fine and like the Marie character, but the main issue was that the plot lacked any kinda of nemesis. The inevitable opponent (Mason Dixon) was perfectly likable with his own struggles, so that element of a Rocky film was lacking. The minor subplots (e.g. Rocky's relationship with his son, or Mason's with his promoters, were hastily done at best). So fairly week, but Rocky is always an enjoyable character and carried the film.\n","date":"2023-03-27","rating":3}],"year":2006}
+{"pub":"3MmXjBiR_dOMIA17bCKR8nYxnsWyylo698KUaaEeWSY","sig":"68LXa1ax_Dx_kWjUx_GpHcu0zTK6T0Hz8JFBLxAAjh19U03cXd3ubvCeJ_niw_6kthI9gNRZc6UxsxEZfUIsCw","type":"sig"}

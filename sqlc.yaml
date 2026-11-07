@@ -1,0 +1,38 @@
+version: 2
+sql:
+  - engine: "sqlite"
+    schema: "./migrations2"
+    queries: "./queries"
+    gen:
+      go:
+        package: "sqlc"
+        out: "sqlc"
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "integer"
+            go_type:
+              type: "int"
+          - db_type: "integer"
+            nullable: true
+            go_type:
+              type: "int"
+              pointer: true
+          - db_type: "INTEGER"
+            go_type:
+              type: "int"
+          - db_type: "INTEGER"
+            nullable: true
+            go_type:
+              type: "int"
+              pointer: true
+          - db_type: "int"
+            go_type:
+              type: "int"
+          - db_type: "int"
+            nullable: true
+            go_type:
+              type: "int"
+              pointer: true
+          - db_type: "bigint"
+            go_type:
+              type: "int"
