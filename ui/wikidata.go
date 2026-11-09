@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -30,6 +32,30 @@ var filmClasses = map[string]bool{
 	"Q17517379": true, // animated short film
 }
 
+// filmFilter is a CirrusSearch keyword matching items that are an
+// instance of a film class or have a TMDB movie id ("|" means or).
+func filmFilter() string {
+	terms := []string{"P4947"}
+	for _, class := range slices.Sorted(maps.Keys(filmClasses)) {
+		terms = append(terms, "P31="+class)
+	}
+	return "haswbstatement:" + strings.Join(terms, "|")
+}
+
+// nonFilmClasses are "instance of" values that rule an item out even
+// if it otherwise looks like a film.
+var nonFilmClasses = map[string]bool{
+	"Q5398426":  true, // television series
+	"Q1259759":  true, // miniseries
+	"Q21191270": true, // television series episode
+	"Q3464665":  true, // television series season
+	"Q1261214":  true, // television special
+	"Q7889":     true, // video game
+	"Q24856":    true, // film series
+	"Q196600":   true, // media franchise
+	"Q482994":   true, // album
+}
+
 // WikidataResult is one candidate movie from a search.
 type WikidataResult struct {
 	ID          string
@@ -45,42 +71,54 @@ type wikidata struct {
 	http    *http.Client
 }
 
-// Search finds movies matching query. Only items that look like films
-// (by class, or by having an IMDb title or TMDB movie id) are returned.
+// Search finds movies matching query. It uses Wikidata's full-text
+// search restricted to items with a film class or a TMDB movie id:
+// the label search (wbsearchentities) can't filter, and for a query
+// like "star wars" its hits are almost all games and albums. Items
+// are checked again after fetching, which also drops TV series,
+// games, and franchises that carry a film statement by mistake.
 func (w *wikidata) Search(ctx context.Context, query string) ([]WikidataResult, error) {
+	query = strings.Join(strings.Fields(query), " ")
+	if query == "" {
+		return nil, nil
+	}
+
 	var search struct {
-		Search []struct {
-			ID string `json:"id"`
-		} `json:"search"`
+		Query struct {
+			Search []struct {
+				Title string `json:"title"` // the item id, e.g. "Q104123"
+			} `json:"search"`
+		} `json:"query"`
 	}
 	err := w.get(ctx, url.Values{
-		"action":   {"wbsearchentities"},
-		"search":   {query},
-		"language": {"en"},
-		"uselang":  {"en"},
-		"type":     {"item"},
-		"limit":    {"20"},
+		"action":   {"query"},
+		"list":     {"search"},
+		"srsearch": {query + " " + filmFilter()},
+		"srlimit":  {"25"},
+		"srprop":   {""},
 	}, &search)
 	if err != nil {
 		return nil, err
 	}
-	if len(search.Search) == 0 {
+	if len(search.Query.Search) == 0 {
 		return nil, nil
 	}
 
-	ids := make([]string, len(search.Search))
-	for i, s := range search.Search {
-		ids[i] = s.ID
+	ids := make([]string, len(search.Query.Search))
+	for i, s := range search.Query.Search {
+		ids[i] = s.Title
 	}
 
 	var entities struct {
 		Entities map[string]wdEntity `json:"entities"`
 	}
 	err = w.get(ctx, url.Values{
-		"action":    {"wbgetentities"},
-		"ids":       {strings.Join(ids, "|")},
-		"props":     {"labels|descriptions|claims"},
-		"languages": {"en"},
+		"action": {"wbgetentities"},
+		"ids":    {strings.Join(ids, "|")},
+		"props":  {"labels|descriptions|claims"},
+		// All languages: many items carry their main label only in
+		// "mul" (the multilingual default), and some obscure films only
+		// in their original language.
 	}, &entities)
 	if err != nil {
 		return nil, err
@@ -162,20 +200,36 @@ type wdCandidate struct {
 	isFilm bool
 }
 
+// anyValue returns a deterministic value from a language map, or "".
+func anyValue(m map[string]struct{ Value string }) string {
+	for _, lang := range slices.Sorted(maps.Keys(m)) {
+		if v := m[lang].Value; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty string.
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 func (e wdEntity) result(id string) wdCandidate {
 	c := wdCandidate{WikidataResult: WikidataResult{
 		ID:          id,
-		Title:       e.Labels["en"].Value,
-		Description: e.Descriptions["en"].Value,
+		Title:       firstNonEmpty(e.Labels["en"].Value, e.Labels["mul"].Value, anyValue(e.Labels), id),
+		Description: firstNonEmpty(e.Descriptions["en"].Value, e.Descriptions["mul"].Value),
 	}}
-	if c.Title == "" {
-		c.Title = id
-	}
 
 	for _, v := range e.strings("P345") { // IMDb ID
 		if imdb := normalizeIMDB(v); imdb != nil {
 			c.IMDB = imdb
-			c.isFilm = true
 			break
 		}
 	}
@@ -189,6 +243,11 @@ func (e wdEntity) result(id string) wdCandidate {
 	for _, v := range e.strings("P31") { // instance of
 		if filmClasses[v] {
 			c.isFilm = true
+		}
+	}
+	for _, v := range e.strings("P31") {
+		if nonFilmClasses[v] {
+			c.isFilm = false
 		}
 	}
 	// Publication date: times look like "+1994-05-21T00:00:00Z". Use
