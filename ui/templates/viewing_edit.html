@@ -1,0 +1,13 @@
+{{define "content"}}{{with .Data}}
+<p class="crumbs"><a href="/movies/{{.Movie.ID}}">← {{.Movie.Title}}</a></p>
+<h1>Edit viewing</h1>
+<form method="post" action="/viewings/{{.Viewing.ID}}" class="stack">
+  {{template "viewing-fields" .Form}}
+  <div><button type="submit" class="primary">Save</button> <a href="/movies/{{.Movie.ID}}">Cancel</a></div>
+</form>
+<section class="danger">
+  <form method="post" action="/viewings/{{.Viewing.ID}}/delete" onsubmit="return confirm('Delete this viewing?')">
+    <button type="submit" class="danger">Delete viewing</button>
+  </form>
+</section>
+{{end}}{{end}}

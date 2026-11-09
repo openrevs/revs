@@ -1,0 +1,4 @@
+bin/
+revs.db
+revs.db-shm
+revs.db-wal

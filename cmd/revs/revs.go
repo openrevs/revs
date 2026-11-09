@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/tui"
 	"github.com/openrevs/revs/tui/workspace"
+	"github.com/openrevs/revs/ui"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"
@@ -34,6 +38,12 @@ type cli struct {
 		DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
 		Server  string `help:"Server URL (persisted to the data dir config on first use)"`
 	} `cmd:"" group:"common" help:"Edit your ratings interactively"`
+
+	UI struct {
+		DataDir   string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+		Listen    string `help:"HTTP listen address" default:"${default_ui_listen}"`
+		NoBrowser bool   `help:"Don't open a web browser"`
+	} `cmd:"" name:"ui" group:"common" help:"Manage your movies and reviews in a local web UI"`
 
 	Keygen struct {
 	} `cmd:"" group:"common" help:"Generate a new identity keypair"`
@@ -123,6 +133,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.Vars{
 			"default_server_listen":       revs.DefaultServerListen,
 			"default_client_listen":       revs.DefaultClientListen,
+			"default_ui_listen":           ui.DefaultListen,
 			"default_cut_interval":        revs.DefaultCutInterval.String(),
 			"default_snapshot_every":      strconv.Itoa(revs.DefaultSnapshotEvery),
 			"default_snapshot_chunk_size": strconv.Itoa(revs.DefaultSnapshotChunkSize),
@@ -168,6 +179,19 @@ func main() {
 	case "tui":
 		if err := tui.Run(workspace.Options{DataDir: CLI.TUI.DataDir, ServerFlag: CLI.TUI.Server}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+	case "ui":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err := ui.Run(ctx, ui.Options{
+			DataDir:     CLI.UI.DataDir,
+			Listen:      CLI.UI.Listen,
+			OpenBrowser: !CLI.UI.NoBrowser,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "revs ui:", err)
 			os.Exit(1)
 		}
 

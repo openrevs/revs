@@ -1,0 +1,28 @@
+{{define "content"}}
+<h1>Servers</h1>
+<p>Push your reviews to openrevs servers, and pull reviews other people have published there.</p>
+{{if .Data}}
+<table class="list">
+  <thead><tr><th>Server</th><th>Last push</th><th>Last pull</th><th>Status</th></tr></thead>
+  <tbody>
+  {{range .Data}}
+  <tr>
+    <td><a href="/servers/{{.ID}}">{{.Url}}</a></td>
+    <td>{{timeAgo .LastPushAt}}{{with .LastPushRev}} (rev {{.}}){{end}}</td>
+    <td>{{timeAgo .LastPullAt}}{{with .LastEpoch}} (epoch {{.}}){{end}}</td>
+    <td>{{with .LastError}}<span class="error-text" title="{{.}}">error</span>{{else}}ok{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No servers yet.</p>
+{{end}}
+<section>
+  <h2>Add a server</h2>
+  <form method="post" action="/servers" class="search">
+    <input name="url" type="url" placeholder="https://revs.example.com" required>
+    <button type="submit">Add</button>
+  </form>
+</section>
+{{end}}

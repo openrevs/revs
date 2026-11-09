@@ -1,0 +1,23 @@
+{{define "content"}}{{with .Data}}
+<p class="crumbs"><a href="/servers/{{.Server.ID}}">← {{.Server.Url}}</a></p>
+<h1>User <span class="mono">{{short .User.Userid}}</span>{{if .IsMe}} <span class="tag">you</span>{{end}}</h1>
+<p class="muted mono small">{{.User.Userid}}</p>
+<p>{{.User.TitleCount}} movies, revision {{.User.Rev}}.</p>
+{{range .Titles}}
+<div class="card">
+  <div class="vhead"><strong>{{.Name}}</strong>{{with .Year}} <span class="muted">({{.}})</span>{{end}}
+    <span class="links small">
+      {{with .Wikidata}}<a href="{{wdURL .}}" target="_blank" rel="noopener">Wikidata</a>{{end}}
+      {{with .IMDB}}<a href="{{imdbURL .}}" target="_blank" rel="noopener">IMDb</a>{{end}}
+      {{with .TMDB}}<a href="{{tmdbURL .}}" target="_blank" rel="noopener">TMDB</a>{{end}}
+    </span>
+  </div>
+  {{range .Reviews}}
+  <div class="vhead small"><span class="date">{{with .ViewedOn}}{{.}}{{else}}undated{{end}}</span> <span class="stars">{{stars .Rating}}</span></div>
+  {{with .Comment}}{{if .}}<p class="review">{{.}}</p>{{end}}{{end}}
+  {{end}}
+</div>
+{{else}}
+<p class="muted">No movies.</p>
+{{end}}
+{{end}}{{end}}

@@ -49,6 +49,11 @@ clientserver:
 tui:
   data: ~/.revs              # data directory / state location
   server: https://ratings.example.com
+
+ui:
+  data: ~/.revs              # holds revs.db and servers/
+  listen: "127.0.0.1:1325"
+  no-browser: false
 ```
 
 Sections are independent: a key under `server:` never affects `tui`.
