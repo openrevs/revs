@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 
+	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
@@ -68,15 +67,15 @@ type manifest struct {
 // parseManifest verifies a signed manifest against the pinned server key
 // and decodes its lines. sjsonl hash-sorts lines, so the metadata line
 // is identified by its fields, not its position.
-func parseManifest(data []byte, pinHex string) (*manifest, error) {
+func parseManifest(data []byte, pin string) (*manifest, error) {
 	doc, err := jsonlines.Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("client: manifest: %w", err)
 	}
 
 	info := doc.Info()
-	if signer := hex.EncodeToString(info.SignerKey); signer != pinHex {
-		return nil, &KeyChangedError{Pinned: pinHex, Got: signer}
+	if signer := keys.EncodePublic(info.SignerKey); signer != pin {
+		return nil, &KeyChangedError{Pinned: pin, Got: signer}
 	}
 
 	m := &manifest{hash: info.Hash}
@@ -192,8 +191,7 @@ func sliceEntry(stream []byte, e manifestEntry) ([]byte, error) {
 // server's derivation. A document's user id must always equal the id
 // derived from the key that signed it.
 func UserID(pub ed25519.PublicKey) string {
-	h := sha256.Sum256(pub)
-	return hex.EncodeToString(h[:16])
+	return keys.UserID(pub)
 }
 
 func userIDFromKey(pub ed25519.PublicKey) string {

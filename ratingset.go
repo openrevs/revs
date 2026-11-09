@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 
+	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
 )
@@ -39,8 +38,7 @@ func NewUser() User {
 
 // userID derives a user ID from a public key.
 func userID(pub ed25519.PublicKey) string {
-	pubHash := sha256.Sum256(pub)
-	return hex.EncodeToString(pubHash[:16])
+	return keys.UserID(pub)
 }
 
 func (u User) ValidIDs() bool {
@@ -48,10 +46,10 @@ func (u User) ValidIDs() bool {
 }
 
 func (u User) Keys() (string, string) {
-	pub := hex.EncodeToString(u.PublicKey)
+	pub := keys.EncodePublic(u.PublicKey)
 	prv := ""
 	if len(u.PrivateKey) > 0 {
-		prv = hex.EncodeToString(u.PrivateKey)
+		prv = keys.EncodePrivate(u.PrivateKey)
 	}
 
 	return pub, prv

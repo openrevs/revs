@@ -3,12 +3,12 @@ package workspace
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"strings"
+
+	"github.com/openrevs/revs/keys"
 )
 
 func (w *Workspace) loadKey() error {
@@ -19,7 +19,7 @@ func (w *Workspace) loadKey() error {
 	if err != nil {
 		return err
 	}
-	key, err := parseKeyHex(string(data))
+	key, err := keys.ParsePrivate(string(data))
 	if err != nil {
 		return fmt.Errorf("workspace: %s: %w", keyFile, err)
 	}
@@ -40,33 +40,21 @@ func (w *Workspace) GenerateKey() (string, error) {
 	return w.saveKey(prv)
 }
 
-// ImportKey installs an existing private key given as hex (the
-// `revs keygen` "Private key" line) and returns the derived user id.
-func (w *Workspace) ImportKey(hexKey string) (string, error) {
+// ImportKey installs an existing base64 private key (the `revs keygen`
+// "Private key" line) and returns the derived user id.
+func (w *Workspace) ImportKey(encoded string) (string, error) {
 	if w.key != nil {
 		return "", errors.New("workspace: key already exists")
 	}
-	key, err := parseKeyHex(hexKey)
+	key, err := keys.ParsePrivate(encoded)
 	if err != nil {
 		return "", err
 	}
 	return w.saveKey(key)
 }
 
-func parseKeyHex(s string) (ed25519.PrivateKey, error) {
-	raw, err := hex.DecodeString(strings.TrimSpace(s))
-	if err != nil {
-		return nil, fmt.Errorf("invalid hex private key: %w", err)
-	}
-	if len(raw) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("private key must be %d bytes (%d hex chars), got %d bytes",
-			ed25519.PrivateKeySize, 2*ed25519.PrivateKeySize, len(raw))
-	}
-	return ed25519.PrivateKey(raw), nil
-}
-
 func (w *Workspace) saveKey(prv ed25519.PrivateKey) (string, error) {
-	content := hex.EncodeToString(prv) + "\n"
+	content := keys.EncodePrivate(prv) + "\n"
 	if err := writeFileAtomic(w.path(keyFile), []byte(content), 0o600); err != nil {
 		return "", err
 	}

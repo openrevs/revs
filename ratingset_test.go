@@ -29,7 +29,7 @@ func TestParseRatingset(t *testing.T) {
 	assert.Error(t, err)
 
 	// A user line whose ID doesn't match the signing key must be rejected.
-	badDoc := `{"id":"00000000000000000000000000000000","min_rating":0,"max_rating":5}` + "\n"
+	badDoc := `{"id":"0000000000000000000000000000000000000000000000000000000000000000","min_rating":0,"max_rating":5}` + "\n"
 	signedBad, _, err := jsonlines.Sign([]byte(badDoc), u.PrivateKey)
 	assert.NoError(t, err)
 	_, _, err = ParseRatingset(signedBad)

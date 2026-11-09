@@ -84,7 +84,7 @@ func newApp(ws *workspace.Workspace) *app {
 	a.serverInput.Width = 50
 
 	a.keyInput = textinput.New()
-	a.keyInput.Placeholder = "128 hex chars from `revs keygen`"
+	a.keyInput.Placeholder = "base64 private key from `revs keygen`"
 	a.keyInput.CharLimit = 200
 	a.keyInput.Width = 70
 

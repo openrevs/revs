@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,13 +156,9 @@ func TestPublishingRoundTrip(t *testing.T) {
 	s, ts := newTestServer(t)
 	ctx := context.Background()
 
-	pubKeyHex := ""
-	{
-		var idx serverIndex
-		require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
-		pubKeyHex = idx.ServerKey
-	}
-	serverPub, err := hex.DecodeString(pubKeyHex)
+	var index serverIndex
+	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &index))
+	serverPub, err := keys.ParsePublic(index.ServerKey)
 	require.NoError(t, err)
 
 	u := NewUser()
@@ -271,7 +268,7 @@ func TestPublishingRoundTrip(t *testing.T) {
 	assert.Equal(t, epoch2, idx.CurrentEpoch)
 	assert.Contains(t, idx.SnapshotEpochs, epoch1)
 	assert.Contains(t, idx.SnapshotEpochs, epoch2)
-	assert.Equal(t, pubKeyHex, idx.ServerKey)
+	assert.Equal(t, index.ServerKey, idx.ServerKey)
 }
 
 // TestSnapshotChunking forces a tiny chunk target so every member gets
@@ -293,7 +290,7 @@ func TestSnapshotChunking(t *testing.T) {
 
 	var idx serverIndex
 	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
-	serverPub, err := hex.DecodeString(idx.ServerKey)
+	serverPub, err := keys.ParsePublic(idx.ServerKey)
 	require.NoError(t, err)
 
 	manifest := fetch(t, ts, fmt.Sprintf("/v1/snapshots/%d/manifest", epoch))

@@ -46,11 +46,14 @@ secure, and has the desireable property of short public and verification keys. U
 random data, which the users should save for safekeeping, a public and private key are generated.
 All ratings sets will include the public key and will be signed.
 
-### User IDs
+### Keys and user IDs
 
-Though Ed25519 generates relatively compact public keys, they are still too long for easy entry or
-display. As alternative ID is derived from the public key by hashing with SHA256 and truncating it
-the first 8 bytes, as 16 hex digits:
+Public and private keys are encoded as standard base64 with padding, so both are 44 characters
+long. The private key is the 32-byte Ed25519 seed (as defined in RFC 8032); the public key is
+derived from it.
 
-For public key `49f7f5a73fc25c0454d06e2c8b31c31b8f78003970731bce84218e8b836c9182`, the ID will be:
-`5656b40d536048f7`.
+A user's ID is the full SHA256 of their public key, as 64 lowercase hex digits. Displays may
+abbreviate it to a prefix, but anything that binds ownership uses the full ID.
+
+For public key `Sff1pz/CXARU0G4sizHDG494ADlwcxvOhCGOi4NskYI=`, the ID will be:
+`5656b40d536048f7991d60b295214e4070a7b1734bdcd66159417d1b82115867`.

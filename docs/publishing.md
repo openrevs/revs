@@ -200,7 +200,7 @@ are deleted.
 ## Server identity
 
 The server ed25519 keypair is generated on first boot into the data
-directory (reusing the existing keygen machinery, hex-encoded). The
+directory (reusing the existing keygen machinery, base64-encoded). The
 key **is** the server's identity — the TOFU pin, the manifest signer,
 the thing peers trust. Backing up the data directory is backing up the
 identity.

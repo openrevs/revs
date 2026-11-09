@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/fsstore"
+	"github.com/openrevs/revs/keys"
 	"github.com/stretchr/testify/require"
 )
 
@@ -390,7 +392,7 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	state, err := store.LoadState()
 	require.NoError(t, err)
 	head := state.Heads[uid]
-	head.Hash = "deadbeefdeadbeefdeadbeefdeadbeef"
+	head.Hash = strings.Repeat("deadbeef", 8)
 	state.Heads[uid] = head
 	require.NoError(t, store.SaveState(state))
 
@@ -434,7 +436,7 @@ func TestKeyPinning(t *testing.T) {
 	resp.Body.Close()
 
 	// Pre-pinning the correct key works.
-	realKey := mustHexKey(t, idx.ServerKey)
+	realKey := mustParseKey(t, idx.ServerKey)
 	pinned := newClient(t, ts.URL, client.WithServerKey(realKey))
 	_, err = pinned.Sync(ctx)
 	require.NoError(t, err)
@@ -481,13 +483,11 @@ func TestPushContentValidation(t *testing.T) {
 	require.ErrorContains(t, err, "does not match signing key")
 }
 
-func mustHexKey(t *testing.T, h string) ed25519.PublicKey {
+func mustParseKey(t *testing.T, s string) ed25519.PublicKey {
 	t.Helper()
 
-	var key []byte
-	_, err := fmt.Sscanf(h, "%x", &key)
+	key, err := keys.ParsePublic(s)
 	require.NoError(t, err)
-	require.Len(t, key, ed25519.PublicKeySize)
 
-	return ed25519.PublicKey(key)
+	return key
 }

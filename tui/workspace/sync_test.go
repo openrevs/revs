@@ -2,12 +2,12 @@ package workspace_test
 
 import (
 	"context"
-	"encoding/hex"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/tui/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,15 +30,15 @@ func newSyncedWorkspace(t *testing.T, url string) *workspace.Workspace {
 	t.Helper()
 	ws, err := workspace.Open(workspace.Options{DataDir: t.TempDir(), ServerFlag: url})
 	require.NoError(t, err)
-	_, err = ws.ImportKey(testKeyHex(t))
+	_, err = ws.ImportKey(testKeyB64(t))
 	require.NoError(t, err)
 	require.NoError(t, ws.InitClient())
 	return ws
 }
 
-func testKeyHex(t *testing.T) string {
+func testKeyB64(t *testing.T) string {
 	t.Helper()
-	return hex.EncodeToString(testKey)
+	return keys.EncodePrivate(testKey)
 }
 
 func cut(t *testing.T, s *revs.Server) {

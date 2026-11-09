@@ -2,7 +2,6 @@ package workspace_test
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/tui/workspace"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +24,7 @@ func newWorkspace(t *testing.T) (*workspace.Workspace, string) {
 	dir := t.TempDir()
 	ws, err := workspace.Open(workspace.Options{DataDir: dir})
 	require.NoError(t, err)
-	_, err = ws.ImportKey(hex.EncodeToString(testKey))
+	_, err = ws.ImportKey(keys.EncodePrivate(testKey))
 	require.NoError(t, err)
 	return ws, dir
 }
@@ -198,7 +198,7 @@ func TestLoadDraftHardErrors(t *testing.T) {
 		{"duplicate lines", []string{uid, `{"name":"Alien"}`, `{"name":"Alien"}`}, "duplicate"},
 		{"title missing name", []string{uid, `{"year":1979}`}, "missing name"},
 		{"control line", []string{`{"sjsonl":"doc","version":"0.1"}`, uid}, "control line"},
-		{"id mismatch", []string{`{"id":"00000000000000000000000000000000"}`}, "does not match"},
+		{"id mismatch", []string{`{"id":"0000000000000000000000000000000000000000000000000000000000000000"}`}, "does not match"},
 	}
 
 	for _, tc := range cases {
@@ -276,7 +276,7 @@ func TestKeyLifecycle(t *testing.T) {
 
 	uid, err := ws.GenerateKey()
 	require.NoError(t, err)
-	assert.Len(t, uid, 32)
+	assert.Len(t, uid, 64)
 
 	info, err := os.Stat(filepath.Join(dir, "user.key"))
 	require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestKeyLifecycle(t *testing.T) {
 	// Import rejects garbage.
 	ws3, err := workspace.Open(workspace.Options{DataDir: t.TempDir()})
 	require.NoError(t, err)
-	_, err = ws3.ImportKey("not-hex")
+	_, err = ws3.ImportKey("not base64!")
 	require.Error(t, err)
 	_, err = ws3.ImportKey("abcd")
 	require.Error(t, err)

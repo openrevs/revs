@@ -15,7 +15,6 @@ package client
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +24,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/openrevs/revs/keys"
 )
 
 type Client struct {
@@ -155,31 +156,30 @@ func (c *Client) ensureState() error {
 	return nil
 }
 
-// resolvePin returns the hex server key every manifest must be signed
+// resolvePin returns the base64 server key every manifest must be signed
 // with: the stored pin, else the configured key, else (trust on first
 // use) the key the index advertises. Callers hold c.mu.
 func (c *Client) resolvePin(idx *serverIndex) (string, error) {
-	pinHex := ""
+	pin := ""
 	if c.pin != nil {
-		pinHex = hex.EncodeToString(c.pin)
+		pin = keys.EncodePublic(c.pin)
 	}
 
 	if stored := c.state.ServerKey; stored != "" {
-		if pinHex != "" && pinHex != stored {
-			return "", &KeyChangedError{Pinned: pinHex, Got: stored}
+		if pin != "" && pin != stored {
+			return "", &KeyChangedError{Pinned: pin, Got: stored}
 		}
-		pinHex = stored
+		pin = stored
 	}
 
-	if pinHex == "" {
-		key, err := hex.DecodeString(idx.ServerKey)
-		if err != nil || len(key) != ed25519.PublicKeySize {
-			return "", fmt.Errorf("client: index advertises invalid server key %q", idx.ServerKey)
+	if pin == "" {
+		if _, err := keys.ParsePublic(idx.ServerKey); err != nil {
+			return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
 		}
-		pinHex = idx.ServerKey
+		pin = idx.ServerKey
 	}
 
-	return pinHex, nil
+	return pin, nil
 }
 
 func (c *Client) fetch(ctx context.Context, path string) ([]byte, error) {

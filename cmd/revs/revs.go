@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +14,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/go-playground/validator/v10"
 	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/tui"
 	"github.com/openrevs/revs/tui/workspace"
 	jsonlines "github.com/openrevs/sjsonl-go"
@@ -177,10 +177,8 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		pk, err := hex.DecodeString(CLI.YAML.PrivateKey)
-		if err != nil {
-			panic(err)
-		}
+		pk, err := keys.ParsePrivate(CLI.YAML.PrivateKey)
+		parser.FatalIfErrorf(err, "--private-key")
 		if _, err := revs.ConvertYAML(data, pk); err != nil {
 			panic(err)
 		}

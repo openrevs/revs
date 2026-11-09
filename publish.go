@@ -14,10 +14,12 @@ import (
 	"strconv"
 	"time"
 
+	"log/slog"
+
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/util"
 	jsonlines "github.com/openrevs/sjsonl-go"
-	"log/slog"
 )
 
 const (
@@ -358,7 +360,7 @@ func (s *Server) writeIndex(ctx context.Context) error {
 
 	idx := serverIndex{
 		SnapshotEpochs: []int{},
-		ServerKey:      hex.EncodeToString(s.key.Public().(ed25519.PublicKey)),
+		ServerKey:      keys.EncodePublic(s.key.Public().(ed25519.PublicKey)),
 	}
 
 	for _, e := range epochs {
