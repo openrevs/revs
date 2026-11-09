@@ -40,6 +40,10 @@ type Server struct {
 	snapshotEvery     int
 	snapshotChunkSize int
 
+	// publishOnUpload cuts an epoch as soon as an upload is accepted,
+	// so tests and local setups don't wait for the cut interval.
+	publishOnUpload bool
+
 	cutMu sync.Mutex
 }
 
@@ -90,6 +94,11 @@ type ServerOptions struct {
 	CutInterval       time.Duration
 	SnapshotEvery     int
 	SnapshotChunkSize int
+	// PublishOnUpload cuts an epoch immediately after each accepted
+	// upload, before responding, so the document is published by the
+	// time the client sees 200. Meant for testing; the periodic cutter
+	// still runs.
+	PublishOnUpload bool
 }
 
 func Start2(dataDir string, opts ServerOptions) {
@@ -107,6 +116,7 @@ func Start2(dataDir string, opts ServerOptions) {
 	if opts.SnapshotChunkSize > 0 {
 		server.snapshotChunkSize = opts.SnapshotChunkSize
 	}
+	server.publishOnUpload = opts.PublishOnUpload
 	listen := opts.Listen
 	if listen == "" {
 		listen = DefaultServerListen
@@ -122,6 +132,12 @@ func Start2(dataDir string, opts ServerOptions) {
 // gigabytes of fixture data; the default suits production.
 func (s *Server) SetSnapshotChunkSize(n int) {
 	s.snapshotChunkSize = n
+}
+
+// SetPublishOnUpload enables cutting an epoch right after each accepted
+// upload (see ServerOptions.PublishOnUpload).
+func (s *Server) SetPublishOnUpload(on bool) {
+	s.publishOnUpload = on
 }
 
 // Handler returns the server's HTTP handler, for embedding or tests.

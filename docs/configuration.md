@@ -31,6 +31,8 @@ server:
   listen: ":1323"            # --listen
   cut-interval: 30m          # --cut-interval
   snapshot-every: 100        # --snapshot-every
+  publish-on-upload: false   # --publish-on-upload: cut an epoch right after
+                             # each accepted upload (for testing)
   snapshot-chunk-size: 268435456  # --snapshot-chunk-size
 
 client:
