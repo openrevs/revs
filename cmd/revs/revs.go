@@ -27,19 +27,27 @@ import (
 type cli struct {
 	Config kong.ConfigFlag `help:"Load configuration from a file (overrides the default config paths)." placeholder:"FILE"`
 
+	TUI struct {
+		DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+		Server  string `help:"Server URL (persisted to the data dir config on first use)"`
+	} `cmd:"" group:"common" help:"Edit your ratings interactively"`
+
+	Keygen struct {
+	} `cmd:"" group:"common" help:"Generate a new identity keypair"`
+
 	Server struct {
 		DataDir           string        `name:"data" help:"Data directory" default:"." type:"path"`
 		Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	} `cmd:"" help:"Start2 server."`
+	} `cmd:"" group:"servers" help:"Run a ratings publishing server"`
 
 	Client struct {
 		DataDir string `name:"data" help:"Data directory" default:"." type:"path"`
 		Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
 		Demo    bool   `help:"Insert demo data"`
-	} `cmd:"" help:"Start2 local client."`
+	} `cmd:"" group:"servers" help:"Run the local web client"`
 
 	ClientServer struct {
 		DataDir           string        `name:"data" help:"Data directory" default:"." type:"path"`
@@ -49,46 +57,49 @@ type cli struct {
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	} `cmd:"" name:"clientserver" help:"Start2 local client and server"`
-
-	Keygen struct {
-	} `cmd:""`
+	} `cmd:"" name:"clientserver" group:"servers" help:"Run the web client and a server together"`
 
 	Sign struct {
 		Input      *os.File `arg:"" help:"Input file"`
 		Output     string   `arg:"" optional:"" help:"Output file"`
 		PrivateKey string   `required:"" help:"Private key"`
-	} `cmd:""`
-
-	YAML struct {
-		Input      *os.File `arg:"" help:"Input file"`
-		PrivateKey string   `required:"" help:"Private key"`
-	} `cmd:""`
+	} `cmd:"" group:"documents" help:"Sign a ratings document"`
 
 	Verify struct {
-		Input *os.File `arg:"" optional:"" help:"Input file"`
-	} `cmd:""`
+		Input *os.File `arg:"" optional:"" help:"Input file (default: stdin)"`
+	} `cmd:"" group:"documents" help:"Check a signed document's signature"`
 
 	Diff struct {
 		Base *os.File `arg:"" help:"Base file"`
 		Dest *os.File `arg:"" help:"Dest file"`
-	} `cmd:""`
+	} `cmd:"" group:"documents" help:"Create a patch from one document to another"`
 
 	Patch struct {
 		Base *os.File `arg:"" help:"Base file"`
 		Diff *os.File `arg:"" help:"Diff file"`
-	} `cmd:""`
+	} `cmd:"" group:"documents" help:"Apply a patch to a document"`
+
+	YAML struct {
+		Input      *os.File `arg:"" help:"Input file"`
+		PrivateKey string   `required:"" help:"Private key"`
+	} `cmd:"" group:"dev" help:"Convert a YAML ratings file to a signed document"`
 
 	Add struct {
-	} `cmd:""`
-
-	TUI struct {
-		DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
-		Server  string `help:"Server URL (persisted to the data dir config on first use)"`
-	} `cmd:"" help:"Interactive ratings editor."`
+	} `cmd:"" group:"dev" help:"Add a title to data.yaml (prints the result)"`
 }
 
 var CLI cli
+
+const tagline = "Portable, signed movie ratings that you own."
+
+// commandGroups titles the sections of the top-level help. Kong lists
+// groups in the order their commands appear in the cli struct.
+var commandGroups = []kong.Group{
+	{Key: "common", Title: "Common commands:"},
+	{Key: "servers", Title: "Servers:"},
+	{Key: "documents", Title: "Documents:"},
+	{Key: "dev", Title: "Development:"},
+}
 
 // defaultConfigPaths are searched in order; values in later files
 // override earlier ones, and --config overrides them all.
@@ -100,6 +111,9 @@ var defaultConfigPaths = []string{"~/.revs/config.yaml", "./revs.yaml"}
 func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 	return kong.New(c,
 		kong.Name("revs"),
+		kong.Description(tagline),
+		kong.ExplicitGroups(commandGroups),
+		kong.ConfigureHelp(kong.HelpOptions{Compact: true, FlagsLast: true}),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
 			"default_server_listen":       revs.DefaultServerListen,
@@ -116,7 +130,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	ctx, err := parser.Parse(os.Args[1:])
+	args := os.Args[1:]
+	if len(args) == 0 {
+		args = []string{"--help"}
+	}
+	ctx, err := parser.Parse(args)
 	parser.FatalIfErrorf(err)
 
 	switch ctx.Command() {

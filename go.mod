@@ -3,7 +3,7 @@ module github.com/openrevs/revs
 go 1.25.0
 
 require (
-	github.com/alecthomas/kong v0.7.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
