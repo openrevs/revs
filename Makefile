@@ -8,6 +8,9 @@ build_psql: models/boil_types_psql.go
 build_sqlite: 
 	go build -o bin/revs ./cmd/revs
 
+generate:
+	sqlc generate
+
 test:
 	go test ./... -count=1
 

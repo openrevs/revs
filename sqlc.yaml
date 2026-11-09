@@ -36,3 +36,29 @@ sql:
           - db_type: "bigint"
             go_type:
               type: "int"
+  - engine: "sqlite"
+    schema: "./ui/migrations"
+    queries: "./ui/queries"
+    gen:
+      go:
+        package: "localdb"
+        out: "ui/localdb"
+        emit_pointers_for_null_types: true
+        overrides: &uioverrides
+          - db_type: "INTEGER"
+            go_type:
+              type: "int64"
+          - db_type: "INTEGER"
+            nullable: true
+            go_type:
+              type: "int64"
+              pointer: true
+  - engine: "sqlite"
+    schema: "./ui/remotemigrations"
+    queries: "./ui/remotequeries"
+    gen:
+      go:
+        package: "remotedb"
+        out: "ui/remotedb"
+        emit_pointers_for_null_types: true
+        overrides: *uioverrides

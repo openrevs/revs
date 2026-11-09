@@ -1,0 +1,70 @@
+{{define "content"}}{{with .Data}}
+<p class="crumbs"><a href="/servers">← Servers</a></p>
+<h1 class="mono">{{.Server.Url}}</h1>
+
+{{if .Conflict}}
+<div class="flash flash-error">
+  <p><strong>The server has a newer revision ({{.Conflict}}) than you last pushed.</strong> You probably pushed from another device.</p>
+  <p>To keep both, pull and merge the server's copy into your collection, then push. Or push anyway, which replaces the server's copy with yours.</p>
+  <div class="actions">
+    <form method="post" action="/servers/{{.Server.ID}}/pull"><button type="submit">1. Pull</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/import-mine"><button type="submit">2. Merge server copy</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/push" onsubmit="return confirm('Replace the server copy with your local collection?')"><button type="submit" class="danger">Push anyway</button></form>
+  </div>
+  <p class="hint">A just-pushed revision only appears after the server publishes its next epoch, so the merge may have to wait.</p>
+</div>
+{{end}}
+{{if .Diverged}}
+<div class="flash flash-error">
+  <p><strong>Your copy of this server's data no longer matches what it publishes.</strong> This can mean local corruption or that the server rewrote its history.</p>
+  <form method="post" action="/servers/{{.Server.ID}}/rebootstrap"><button type="submit">Re-download from a snapshot</button></form>
+</div>
+{{end}}
+{{if .KeyChange}}
+<div class="flash flash-error">
+  <p><strong>The server is signing with a different key than the one pinned on first contact.</strong> Either the server's identity changed or something is intercepting it. Only continue if you trust the change.</p>
+  <form method="post" action="/servers/{{.Server.ID}}/reset" onsubmit="return confirm('Forget this server\'s data and trust its new key?')"><button type="submit" class="danger">Forget pulled data and re-pin</button></form>
+</div>
+{{end}}
+
+<dl class="kv">
+  <dt>Last push</dt><dd>{{timeAgo .Server.LastPushAt}}{{with .Server.LastPushRev}} (revision {{.}}){{end}}</dd>
+  <dt>Last pull</dt><dd>{{timeAgo .Server.LastPullAt}} (epoch {{.Epoch}})</dd>
+  {{with .Server.LastError}}<dt>Last error</dt><dd class="error-text">{{.}}</dd>{{end}}
+  {{with .Mine}}<dt>Your published copy</dt><dd>revision {{.Rev}}, {{.TitleCount}} movies</dd>{{end}}
+</dl>
+
+<div class="actions">
+  <form method="post" action="/servers/{{.Server.ID}}/push"><button type="submit" class="primary">Push my reviews</button></form>
+  <form method="post" action="/servers/{{.Server.ID}}/pull"><button type="submit">Pull</button></form>
+  {{if .Mine}}<form method="post" action="/servers/{{.Server.ID}}/import-mine"><button type="submit">Merge my published copy</button></form>{{end}}
+</div>
+
+<section>
+  <h2>Users on this server</h2>
+  {{if .Users}}
+  <table class="list">
+    <thead><tr><th>User</th><th class="num">Movies</th><th class="num">Revision</th></tr></thead>
+    <tbody>
+    {{range .Users}}
+    <tr>
+      <td><a class="mono" href="/servers/{{$.Data.Server.ID}}/users/{{.Userid}}" title="{{.Userid}}">{{short .Userid}}</a>{{if eq .Userid $.Data.MyID}} <span class="tag">you</span>{{end}}</td>
+      <td class="num">{{.TitleCount}}</td>
+      <td class="num">{{.Rev}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">Nothing pulled yet.</p>
+  {{end}}
+</section>
+
+<section class="danger">
+  <h2>Maintenance</h2>
+  <div class="actions">
+    <form method="post" action="/servers/{{.Server.ID}}/reset" onsubmit="return confirm('Discard everything pulled from this server, including its pinned key?')"><button type="submit">Discard pulled data</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/delete" onsubmit="return confirm('Remove this server? Your published reviews stay on it.')"><button type="submit" class="danger">Remove server</button></form>
+  </div>
+</section>
+{{end}}{{end}}

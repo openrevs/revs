@@ -1,0 +1,32 @@
+{{define "content"}}{{with .Data}}
+<div class="heading">
+  <h1>Movies</h1>
+  <a class="button primary" href="/movies/new">Add a movie</a>
+</div>
+<form class="search" method="get" action="/movies">
+  <input type="search" name="q" value="{{.Query}}" placeholder="Search your movies" autofocus>
+  <button type="submit">Search</button>
+  {{if .Query}}<a href="/movies">Clear</a>{{end}}
+</form>
+<p class="muted">{{.Counts.Movies}} movies, {{.Counts.Viewings}} viewings.</p>
+{{if .Movies}}
+<table class="list">
+  <thead><tr><th>Title</th><th>Year</th><th>Rating</th><th>Last seen</th><th class="num">Viewings</th></tr></thead>
+  <tbody>
+  {{range .Movies}}
+  <tr>
+    <td><a href="/movies/{{.ID}}">{{.Title}}</a></td>
+    <td>{{with .Year}}{{.}}{{end}}</td>
+    <td class="stars">{{stars .LatestRating}}</td>
+    <td>{{.LastViewed}}</td>
+    <td class="num">{{.ViewingCount}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else if .Query}}
+<p>No movies match “{{.Query}}”. <a href="/movies/new?q={{.Query}}">Add it?</a></p>
+{{else}}
+<p>Your collection is empty. <a href="/movies/new">Add a movie</a>, or <a href="/data">import</a> an existing ratings file.</p>
+{{end}}
+{{end}}{{end}}
