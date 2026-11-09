@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +20,7 @@ import (
 	"github.com/openrevs/revs/tui"
 	"github.com/openrevs/revs/tui/workspace"
 	jsonlines "github.com/openrevs/sjsonl-go"
+	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"
 )
 
@@ -187,6 +190,25 @@ func main() {
 			panic(err)
 		}
 
+	case "sign <input>", "sign <input> <output>":
+		data, err := io.ReadAll(CLI.Sign.Input)
+		if err != nil {
+			panic(err)
+		}
+		pk, err := keys.ParsePrivate(CLI.Sign.PrivateKey)
+		parser.FatalIfErrorf(err, "--private-key")
+		signed, err := signDocument(data, pk)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "revs sign:", err)
+			os.Exit(1)
+		}
+		if CLI.Sign.Output == "" {
+			os.Stdout.Write(signed)
+		} else if err := os.WriteFile(CLI.Sign.Output, signed, 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "revs sign:", err)
+			os.Exit(1)
+		}
+
 	case "verify", "verify <input>":
 		input := os.Stdin
 		if CLI.Verify.Input != nil {
@@ -244,6 +266,18 @@ func main() {
 	default:
 		panic(ctx.Command())
 	}
+}
+
+// signDocument signs JSONL data lines. An existing sjsonl control line
+// (an already-signed document) is dropped first, so a document can be
+// re-signed after editing.
+func signDocument(data []byte, key ed25519.PrivateKey) ([]byte, error) {
+	first, rest, _ := bytes.Cut(data, []byte("\n"))
+	if gjson.GetBytes(first, "sjsonl").Exists() {
+		data = rest
+	}
+	signed, _, err := jsonlines.Sign(data, key)
+	return signed, err
 }
 
 // requireDir replaces kong's existingdir flag type, whose validation is
