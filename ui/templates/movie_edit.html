@@ -1,0 +1,23 @@
+{{define "content"}}{{with .Data}}
+<p class="crumbs"><a href="/movies/{{.Movie.ID}}">← {{.Movie.Title}}</a></p>
+<h1>Edit movie</h1>
+<form method="post" action="/movies/{{.Movie.ID}}" class="stack">
+  {{template "movie-fields" .Form}}
+  <div><button type="submit" class="primary">Save</button> <a href="/movies/{{.Movie.ID}}">Cancel</a></div>
+</form>
+<section>
+  <h2>Look up on Wikidata</h2>
+  <p class="muted">Pick a result to replace the title, year, and ids above.</p>
+  <form class="search" method="get" action="/movies/{{.Movie.ID}}/edit">
+    <input type="search" name="q" value="{{if .Query}}{{.Query}}{{else}}{{.Movie.Title}}{{end}}">
+    <button type="submit">Search</button>
+  </form>
+  {{template "wikidata-results" (dict "Query" .Query "Results" .Results "SearchErr" .SearchErr "Action" (print "/movies/" .Movie.ID) "Button" "Use")}}
+</section>
+<section class="danger">
+  <h2>Delete</h2>
+  <form method="post" action="/movies/{{.Movie.ID}}/delete" onsubmit="return confirm('Delete this movie and all its viewings?')">
+    <button type="submit" class="danger">Delete {{.Movie.Title}}</button>
+  </form>
+</section>
+{{end}}{{end}}

@@ -1,0 +1,54 @@
+{{define "content"}}{{with .Data}}
+<p class="crumbs"><a href="/movies">← Movies</a></p>
+<div class="heading">
+  <h1>{{.Movie.Title}}{{with .Movie.Year}} <span class="muted">({{.}})</span>{{end}}</h1>
+  <a class="button" href="/movies/{{.Movie.ID}}/edit">Edit</a>
+</div>
+<p class="links">{{template "ext-links" .Movie}}</p>
+
+<section>
+  <h2>Your viewings</h2>
+  {{if .Viewings}}
+  <ul class="viewings">
+  {{range .Viewings}}
+    <li>
+      <div class="vhead">
+        <span class="date">{{with .ViewedOn}}{{.}}{{else}}undated{{end}}</span>
+        <span class="stars">{{stars .Rating}}</span>
+        <a class="small" href="/viewings/{{.ID}}/edit">edit</a>
+      </div>
+      {{with .Review}}<p class="review">{{.}}</p>{{end}}
+    </li>
+  {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">No viewings yet.</p>
+  {{end}}
+</section>
+
+<section>
+  <h2>Add a viewing</h2>
+  <form method="post" action="/movies/{{.Movie.ID}}/viewings" class="stack">
+    {{template "viewing-fields" .Form}}
+    <div><button type="submit" class="primary">Add viewing</button></div>
+  </form>
+</section>
+
+{{if .Others}}
+<section>
+  <h2>Others' reviews</h2>
+  <ul class="viewings">
+  {{range .Others}}
+    <li>
+      <div class="vhead">
+        <a class="mono" href="/servers/{{.ServerID}}/users/{{.Userid}}" title="{{.Userid}}">{{short .Userid}}</a>
+        <span class="date">{{with .ViewedOn}}{{.}}{{end}}</span>
+        <span class="stars">{{stars .Rating}}</span>
+      </div>
+      {{with .Comment}}<p class="review">{{.}}</p>{{end}}
+    </li>
+  {{end}}
+  </ul>
+</section>
+{{end}}
+{{end}}{{end}}

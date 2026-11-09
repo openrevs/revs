@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · revs</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/movies">revs</a>
+  <nav>
+    <a href="/movies"{{if eq .Nav "movies"}} class="active"{{end}}>Movies</a>
+    <a href="/history"{{if eq .Nav "history"}} class="active"{{end}}>History</a>
+    <a href="/servers"{{if eq .Nav "servers"}} class="active"{{end}}>Servers</a>
+    <a href="/identity"{{if eq .Nav "identity"}} class="active"{{end}}>Identity</a>
+    <a href="/data"{{if eq .Nav "data"}} class="active"{{end}}>Import/Export</a>
+  </nav>
+  <span class="whoami">{{if .UserID}}<span class="mono" title="{{.UserID}}">{{short .UserID}}</span>{{else}}<a href="/identity">no key yet</a>{{end}}</span>
+</header>
+<main>
+{{with .Flash}}<div class="flash flash-{{.Kind}}" role="status">{{.Msg}}</div>{{end}}
+{{template "content" .}}
+</main>
+</body>
+</html>
+
+{{define "rating-input"}}
+<fieldset class="rating">
+  <legend>Rating</legend>
+  <label><input type="radio" name="rating" value="none"{{if eq .Rating "none"}} checked{{end}}> No rating</label>
+  {{range seq 0 5}}
+  <label><input type="radio" name="rating" value="{{.}}"{{if eq $.Rating (print .)}} checked{{end}}> {{stars (int64 .)}}</label>
+  {{end}}
+</fieldset>
+{{end}}
+
+{{define "viewing-fields"}}
+<label>Date watched <input type="date" name="viewed_on" value="{{.Date}}"></label>
+{{template "rating-input" .}}
+<label>Review <textarea name="review" rows="4" placeholder="Optional">{{.Review}}</textarea></label>
+{{end}}
+
+{{define "movie-fields"}}
+<div class="grid2">
+  <label>Title <input name="title" value="{{.Title}}" required></label>
+  <label>Year <input name="year" value="{{.Year}}" inputmode="numeric" size="6"></label>
+</div>
+<div class="grid3">
+  <label>Wikidata id <input name="wikidata_id" value="{{.Wikidata}}" placeholder="Q104123"></label>
+  <label>IMDb id <input name="imdb_id" value="{{.IMDB}}" placeholder="tt0110912"></label>
+  <label>TMDB id <input name="tmdb_id" value="{{.TMDB}}" placeholder="680"></label>
+</div>
+<p class="hint">Ids may be pasted as full URLs.</p>
+{{end}}
+
+{{define "ext-links"}}
+{{with .WikidataID}}<a href="{{wdURL .}}" target="_blank" rel="noopener">Wikidata</a>{{end}}
+{{with .ImdbID}}<a href="{{imdbURL .}}" target="_blank" rel="noopener">IMDb</a>{{end}}
+{{with .TmdbID}}<a href="{{tmdbURL .}}" target="_blank" rel="noopener">TMDB</a>{{end}}
+{{end}}
+
+{{/* Wikidata results; each posts a movie form to .Action. */}}
+{{define "wikidata-results"}}
+{{if .SearchErr}}<p class="flash flash-error">Wikidata search failed: {{.SearchErr}}</p>{{end}}
+{{if .Query}}{{if not .Results}}{{if not .SearchErr}}<p class="muted">No films found on Wikidata for “{{.Query}}”.</p>{{end}}{{end}}{{end}}
+{{if .Results}}
+<ul class="results">
+{{range .Results}}
+  <li>
+    <form method="post" action="{{$.Action}}">
+      <input type="hidden" name="title" value="{{.Title}}">
+      <input type="hidden" name="year" value="{{with .Year}}{{.}}{{end}}">
+      <input type="hidden" name="wikidata_id" value="{{.ID}}">
+      <input type="hidden" name="imdb_id" value="{{deref .IMDB}}">
+      <input type="hidden" name="tmdb_id" value="{{deref .TMDB}}">
+      <button type="submit">{{$.Button}}</button>
+    </form>
+    <div>
+      <strong>{{.Title}}</strong>{{with .Year}} ({{.}}){{end}}
+      <div class="muted">{{.Description}}</div>
+      <div class="links small">
+        <a href="{{wdURL .ID}}" target="_blank" rel="noopener">{{.ID}}</a>
+        {{with .IMDB}}<a href="{{imdbURL .}}" target="_blank" rel="noopener">{{.}}</a>{{end}}
+        {{with .TMDB}}<a href="{{tmdbURL .}}" target="_blank" rel="noopener">TMDB {{.}}</a>{{end}}
+      </div>
+    </div>
+  </li>
+{{end}}
+</ul>
+{{end}}
+{{end}}

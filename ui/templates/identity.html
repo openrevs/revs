@@ -1,0 +1,39 @@
+{{define "content"}}{{with .Data}}
+<h1>Identity</h1>
+<p>Your openrevs identity is an Ed25519 key pair. Everything you publish is signed with the private key, and your user id is derived from the public key. Anyone with the private key can publish as you.</p>
+{{with .KeyErr}}<p class="flash flash-error">{{.}}</p>{{end}}
+{{if .UserID}}
+<dl class="kv">
+  <dt>User id</dt><dd class="mono">{{.UserID}}</dd>
+  <dt>Public key</dt><dd class="mono">{{.PublicKey}}</dd>
+  <dt>Private key</dt>
+  <dd>{{if .PrivateKey}}<code class="mono secret">{{.PrivateKey}}</code><br><span class="hint">Store this somewhere safe. It is the only way to recover your identity.</span>
+      {{else}}<form method="post" action="/identity/reveal"><button type="submit">Reveal</button></form>{{end}}</dd>
+</dl>
+<section class="danger">
+  <h2>Replace key</h2>
+  <p>Replacing your key gives you a new identity. Servers will treat it as a different user. Back up the current key first.</p>
+  <form method="post" action="/identity/generate" class="stack">
+    <label class="inline"><input type="checkbox" name="confirm_replace" value="yes"> I understand this replaces my current key</label>
+    <div><button type="submit" class="danger">Generate a new key</button></div>
+  </form>
+  <form method="post" action="/identity/import" class="stack">
+    <label>Private key <input name="private_key" class="mono" autocomplete="off" placeholder="base64 private key"></label>
+    <label class="inline"><input type="checkbox" name="confirm_replace" value="yes"> I understand this replaces my current key</label>
+    <div><button type="submit" class="danger">Import key</button></div>
+  </form>
+</section>
+{{else}}
+<p>You don't have a key yet. You need one to push to servers or export signed files.</p>
+<section>
+  <form method="post" action="/identity/generate"><button type="submit" class="primary">Generate a new key</button></form>
+</section>
+<section>
+  <h2>Or use an existing key</h2>
+  <form method="post" action="/identity/import" class="stack">
+    <label>Private key <input name="private_key" class="mono" autocomplete="off" placeholder="base64 private key, e.g. from `revs keygen`"></label>
+    <div><button type="submit">Import key</button></div>
+  </form>
+</section>
+{{end}}
+{{end}}{{end}}
