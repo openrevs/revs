@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kalafut/dmrs/client"
+	"github.com/openrevs/revs/client"
 )
 
 type Store struct {

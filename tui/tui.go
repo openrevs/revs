@@ -1,4 +1,4 @@
-// Package tui is the terminal UI for a personal dmrs movie collection:
+// Package tui is the terminal UI for a personal revs movie collection:
 // a Bubble Tea front end over tui/workspace, which owns all state and
 // sync logic. Screens: a first-run wizard (server → key → initial
 // pull), a filterable title list, a title detail view with the full
@@ -8,7 +8,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs/tui/workspace"
 )
 
 // Run opens the workspace and drives the program until quit. Draft

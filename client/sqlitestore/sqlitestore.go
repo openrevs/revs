@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/kalafut/dmrs/client"
+	"github.com/openrevs/revs/client"
 	_ "modernc.org/sqlite"
 )
 

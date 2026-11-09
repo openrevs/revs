@@ -38,7 +38,7 @@ func (a *app) updateWizardServer(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a *app) viewWizardServer() string {
 	return styleDocFrame.Render(
-		styleTitle.Render("dmrs — first run") + "\n\n" +
+		styleTitle.Render("revs — first run") + "\n\n" +
 			"Server URL:\n" + a.serverInput.View() + "\n\n" +
 			errLine(a.wizardErr) +
 			styleHelp.Render("enter continue · esc quit"))
@@ -96,7 +96,7 @@ func (a *app) updateWizardKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a *app) viewWizardKey() string {
-	head := styleTitle.Render("dmrs — identity") + "\n\n"
+	head := styleTitle.Render("revs — identity") + "\n\n"
 	if a.keyImport {
 		return styleDocFrame.Render(head +
 			"Paste your private key (hex):\n" + a.keyInput.View() + "\n\n" +
@@ -120,14 +120,14 @@ func (a *app) enterWizardSync() (tea.Model, tea.Cmd) {
 func (a *app) viewWizardSync() string {
 	if a.wizardErr != "" {
 		return styleDocFrame.Render(
-			styleTitle.Render("dmrs — first sync") + "\n\n" +
+			styleTitle.Render("revs — first sync") + "\n\n" +
 				styleError.Render("sync failed: "+a.wizardErr) + "\n\n" +
 				"  r  retry\n" +
 				"  c  continue offline with an empty collection\n" +
 				"  q  quit\n")
 	}
 	return styleDocFrame.Render(
-		styleTitle.Render("dmrs — first sync") + "\n\n" +
+		styleTitle.Render("revs — first sync") + "\n\n" +
 			a.spin.View() + " contacting server...")
 }
 

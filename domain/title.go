@@ -3,8 +3,8 @@ package domain
 import (
 	"context"
 
-	"github.com/kalafut/dmrs/sqlc"
-	"github.com/kalafut/dmrs/util"
+	"github.com/openrevs/revs/sqlc"
+	"github.com/openrevs/revs/util"
 )
 
 func (u *DAL) TitleSearch(ctx context.Context, q TitleQuery) ([]*Title, error) {

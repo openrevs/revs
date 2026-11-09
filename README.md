@@ -1,4 +1,4 @@
-# Federatings README
+# Revs README
 
 ## User authentication
 1. Users generates DSA public/private key
@@ -211,4 +211,4 @@ A basic rule will be if a secret key is ever published, the ID should be ignored
 * https://tox.chat
 
 
-#dev/federatings
+#dev/revs

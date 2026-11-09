@@ -7,17 +7,17 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/tui/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// startServer runs a real dmrs server over httptest; nothing is
+// startServer runs a real revs server over httptest; nothing is
 // visible to Sync until a Cut publishes an epoch.
-func startServer(t *testing.T) (*dmrs.Server, *httptest.Server) {
+func startServer(t *testing.T) (*revs.Server, *httptest.Server) {
 	t.Helper()
-	s, err := dmrs.NewServer(t.TempDir())
+	s, err := revs.NewServer(t.TempDir())
 	require.NoError(t, err)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
@@ -41,7 +41,7 @@ func testKeyHex(t *testing.T) string {
 	return hex.EncodeToString(testKey)
 }
 
-func cut(t *testing.T, s *dmrs.Server) {
+func cut(t *testing.T, s *revs.Server) {
 	t.Helper()
 	_, err := s.Cut(context.Background())
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestPushPullRoundTrip(t *testing.T) {
 	require.NoError(t, a.NewEmptyDraft())
 	require.NoError(t, a.AddTitle("Alien", ptr(1979), nil))
 	require.NoError(t, a.AddTitle("Brazil", ptr(1985), nil))
-	require.NoError(t, a.AddReview(a.Titles()[0].Index, dmrs.Review2{Date: ptr("2026-08-11"), Rating: ptr(5)}))
+	require.NoError(t, a.AddReview(a.Titles()[0].Index, revs.Review2{Date: ptr("2026-08-11"), Rating: ptr(5)}))
 	assert.True(t, a.Dirty())
 
 	out, err := a.Push(ctx)

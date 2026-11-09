@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/tui/workspace"
 )
 
 type screen int
@@ -84,7 +84,7 @@ func newApp(ws *workspace.Workspace) *app {
 	a.serverInput.Width = 50
 
 	a.keyInput = textinput.New()
-	a.keyInput.Placeholder = "128 hex chars from `dmrs keygen`"
+	a.keyInput.Placeholder = "128 hex chars from `revs keygen`"
 	a.keyInput.CharLimit = 200
 	a.keyInput.Width = 70
 

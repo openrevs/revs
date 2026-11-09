@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/openrevs/revs/domain"
 	"log/slog"
-	"github.com/kalafut/dmrs/domain"
 )
 
 const (

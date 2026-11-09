@@ -7,12 +7,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs"
+	"github.com/openrevs/revs"
 )
 
 // displayReviews returns the underlying review indexes in display
 // order: newest date first, undated last, later entries winning ties.
-func displayReviews(t dmrs.Title2) []int {
+func displayReviews(t revs.Title2) []int {
 	idxs := make([]int, len(t.Reviews))
 	for i := range idxs {
 		idxs[i] = i
@@ -33,10 +33,10 @@ func displayReviews(t dmrs.Title2) []int {
 	return idxs
 }
 
-func (a *app) detailTitle() (dmrs.Title2, bool) {
+func (a *app) detailTitle() (revs.Title2, bool) {
 	t, err := a.ws.Title(a.detailIdx)
 	if err != nil {
-		return dmrs.Title2{}, false
+		return revs.Title2{}, false
 	}
 	return t, true
 }

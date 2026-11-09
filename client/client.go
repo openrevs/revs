@@ -1,4 +1,4 @@
-// Package client is a generic consumer of the dmrs publishing scheme
+// Package client is a generic consumer of the revs publishing scheme
 // (docs/publishing.md). It pulls the published corpus — epochs, patches,
 // snapshots, manifests — verifying everything against the server's
 // signing key, and pushes signed documents with the revision discipline

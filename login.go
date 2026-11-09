@@ -1,11 +1,11 @@
-package dmrs
+package revs
 
 import (
 	"database/sql"
 	"errors"
 	"net/http"
 
-	"github.com/kalafut/dmrs/domain"
+	"github.com/openrevs/revs/domain"
 )
 
 func (c *Client) loginGetPost(w http.ResponseWriter, r *http.Request) error {

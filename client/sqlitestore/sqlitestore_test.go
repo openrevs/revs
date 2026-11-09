@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/client/sqlitestore"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +68,7 @@ func TestStoreContract(t *testing.T) {
 func TestClientRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
-	s, err := dmrs.NewServer(t.TempDir())
+	s, err := revs.NewServer(t.TempDir())
 	require.NoError(t, err)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()

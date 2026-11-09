@@ -1,12 +1,12 @@
-package dmrs
+package revs
 
 import (
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/util"
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/util"
 )
 
 func (c *Client) titlesGet(w http.ResponseWriter, r *http.Request) error {

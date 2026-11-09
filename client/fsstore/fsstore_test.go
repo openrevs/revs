@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/client/fsstore"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/client/fsstore"
 	"github.com/stretchr/testify/require"
 )
 

@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"database/sql"
@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const dbfilename = "dmrs.db"
+const dbfilename = "revs.db"
 
 var (
 	//go:embed migrations2/*.sql
@@ -19,7 +19,7 @@ var (
 	mu         sync.Mutex
 )
 
-// GetDB opens (or returns the already-open) database at dir/dmrs.db and
+// GetDB opens (or returns the already-open) database at dir/revs.db and
 // runs migrations. Callers using the same directory share one handle, so
 // client and server can run in one process against one database.
 func GetDB(dir string) (*DB, error) {

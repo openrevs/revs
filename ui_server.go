@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/templates"
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/templates"
 )
 
 const LoginPath = "/login"

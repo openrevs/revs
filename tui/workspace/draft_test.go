@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/tui/workspace"
-	jsonlines "github.com/kalafut/sjsonl"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/tui/workspace"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,7 +105,7 @@ func TestReviewCRUD(t *testing.T) {
 	idx := ws.Titles()[0].Index
 
 	// Add to a title with no reviews array.
-	require.NoError(t, ws.AddReview(idx, dmrs.Review2{Date: ptr("2026-08-11"), Rating: ptr(5)}))
+	require.NoError(t, ws.AddReview(idx, revs.Review2{Date: ptr("2026-08-11"), Rating: ptr(5)}))
 	title, err := ws.Title(idx)
 	require.NoError(t, err)
 	require.Len(t, title.Reviews, 1)
@@ -117,7 +117,7 @@ func TestReviewCRUD(t *testing.T) {
 	_, err = ws.LoadDraft()
 	require.NoError(t, err)
 	idx = ws.Titles()[0].Index
-	require.NoError(t, ws.UpdateReview(idx, 0, dmrs.Review2{Date: ptr("2026-08-11"), Rating: ptr(4)}))
+	require.NoError(t, ws.UpdateReview(idx, 0, revs.Review2{Date: ptr("2026-08-11"), Rating: ptr(4)}))
 	got := draftBytes(t, dir)
 	assert.Contains(t, got, `"mood":"tense"`)
 	assert.Contains(t, got, `"rating":4`)
@@ -125,7 +125,7 @@ func TestReviewCRUD(t *testing.T) {
 	assert.NotContains(t, got, `"comment"`)
 
 	// Second review, then delete the first.
-	require.NoError(t, ws.AddReview(idx, dmrs.Review2{Date: ptr("2026-08-12"), Rating: ptr(3), Comment: ptr("rewatch")}))
+	require.NoError(t, ws.AddReview(idx, revs.Review2{Date: ptr("2026-08-12"), Rating: ptr(3), Comment: ptr("rewatch")}))
 	title, _ = ws.Title(idx)
 	require.Len(t, title.Reviews, 2)
 	require.NoError(t, ws.DeleteReview(idx, 0))

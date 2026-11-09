@@ -3,7 +3,7 @@ package domain
 import (
 	"database/sql"
 
-	"github.com/kalafut/dmrs/sqlc"
+	"github.com/openrevs/revs/sqlc"
 )
 
 type DAL struct {

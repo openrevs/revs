@@ -1,10 +1,10 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
 	"testing"
 
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 )
 

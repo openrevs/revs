@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/client"
-	jsonlines "github.com/kalafut/sjsonl"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/client"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -24,20 +24,20 @@ import (
 // round-trip untouched.
 type Draft struct {
 	UserRaw []byte
-	User    dmrs.User2
+	User    revs.User2
 	Titles  []TitleEntry // underlying order = file order
 }
 
 type TitleEntry struct {
 	Raw   []byte
-	Title dmrs.Title2
+	Title revs.Title2
 }
 
 // TitleRef pairs a title view with its stable underlying index, the
 // handle every mutator takes (the sorted view reorders freely).
 type TitleRef struct {
 	Index int
-	Title dmrs.Title2
+	Title revs.Title2
 }
 
 // LoadReport carries non-fatal problems found in a draft.
@@ -195,7 +195,7 @@ func (w *Workspace) parseDraft(data []byte, report *LoadReport) (*Draft, error) 
 			continue
 		}
 
-		var t dmrs.Title2
+		var t revs.Title2
 		if err := json.Unmarshal(raw, &t); err != nil {
 			return nil, fmt.Errorf("line %d: bad title line: %w", n, err)
 		}
@@ -269,19 +269,19 @@ func (w *Workspace) Titles() []TitleRef {
 }
 
 // Title returns the current view of one title by underlying index.
-func (w *Workspace) Title(idx int) (dmrs.Title2, error) {
+func (w *Workspace) Title(idx int) (revs.Title2, error) {
 	if w.draft == nil {
-		return dmrs.Title2{}, ErrNoDraft
+		return revs.Title2{}, ErrNoDraft
 	}
 	if idx < 0 || idx >= len(w.draft.Titles) {
-		return dmrs.Title2{}, fmt.Errorf("workspace: no title at index %d", idx)
+		return revs.Title2{}, fmt.Errorf("workspace: no title at index %d", idx)
 	}
 	return w.draft.Titles[idx].Title, nil
 }
 
-func (w *Workspace) User() dmrs.User2 {
+func (w *Workspace) User() revs.User2 {
 	if w.draft == nil {
-		return dmrs.User2{}
+		return revs.User2{}
 	}
 	return w.draft.User
 }
@@ -295,7 +295,7 @@ func (w *Workspace) AddTitle(name string, year *int, typ *string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("title name is required")
 	}
-	raw, err := json.Marshal(dmrs.Title2{Name: name, Year: year, Type: typ})
+	raw, err := json.Marshal(revs.Title2{Name: name, Year: year, Type: typ})
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ func (w *Workspace) DeleteTitle(idx int) error {
 }
 
 // AddReview appends a review to a title's reviews array.
-func (w *Workspace) AddReview(idx int, r dmrs.Review2) error {
+func (w *Workspace) AddReview(idx int, r revs.Review2) error {
 	raw, err := w.titleRaw(idx)
 	if err != nil {
 		return err
@@ -355,7 +355,7 @@ func (w *Workspace) AddReview(idx int, r dmrs.Review2) error {
 
 // UpdateReview rewrites date/rating/comment of one review in place,
 // preserving any unknown fields inside the review object.
-func (w *Workspace) UpdateReview(idx, ri int, r dmrs.Review2) error {
+func (w *Workspace) UpdateReview(idx, ri int, r revs.Review2) error {
 	raw, err := w.titleRaw(idx)
 	if err != nil {
 		return err
@@ -429,7 +429,7 @@ func setOrDelete[T any](raw []byte, path string, v *T) ([]byte, error) {
 // appends), and persists. Duplicate byte-identical lines would make
 // the document unsignable, so they are rejected here.
 func (w *Workspace) commitTitle(idx int, raw []byte) error {
-	var t dmrs.Title2
+	var t revs.Title2
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return err
 	}
@@ -502,8 +502,8 @@ func (w *Workspace) computeDirty() bool {
 // LatestReview picks the review shown in list views: the one with the
 // greatest date (YYYY-MM-DD sorts lexically), undated reviews losing
 // to dated ones; ties go to the later entry.
-func LatestReview(t dmrs.Title2) *dmrs.Review2 {
-	var best *dmrs.Review2
+func LatestReview(t revs.Title2) *revs.Review2 {
+	var best *revs.Review2
 	bestDate := ""
 	for i := range t.Reviews {
 		r := &t.Reviews[i]

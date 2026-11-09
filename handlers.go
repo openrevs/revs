@@ -1,12 +1,12 @@
-package dmrs
+package revs
 
 import (
 	"io"
 	"net/http"
 	"strings"
 
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/util"
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/util"
 )
 
 // maxUploadSize bounds the size of an uploaded ratingset.

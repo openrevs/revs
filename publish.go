@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -14,10 +14,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/util"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"log/slog"
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/util"
-	jsonlines "github.com/kalafut/sjsonl"
 )
 
 const (

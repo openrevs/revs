@@ -14,10 +14,10 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/go-playground/validator/v10"
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/tui"
-	"github.com/kalafut/dmrs/tui/workspace"
-	jsonlines "github.com/kalafut/sjsonl"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/tui"
+	"github.com/openrevs/revs/tui/workspace"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,13 +33,13 @@ type cli struct {
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	} `cmd help:"Start2 server."`
+	} `cmd:"" help:"Start2 server."`
 
 	Client struct {
 		DataDir string `name:"data" help:"Data directory" default:"." type:"path"`
 		Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
 		Demo    bool   `help:"Insert demo data"`
-	} `cmd help:"Start2 local client."`
+	} `cmd:"" help:"Start2 local client."`
 
 	ClientServer struct {
 		DataDir           string        `name:"data" help:"Data directory" default:"." type:"path"`
@@ -49,64 +49,64 @@ type cli struct {
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	} `cmd name:"clientserver" help:"Start2 local client and server"`
+	} `cmd:"" name:"clientserver" help:"Start2 local client and server"`
 
 	Keygen struct {
-	} `cmd`
+	} `cmd:""`
 
 	Sign struct {
-		Input      *os.File `arg help:"Input file"`
-		Output     string   `arg optional help:"Output file"`
-		PrivateKey string   `required help:"Private key"`
-	} `cmd`
+		Input      *os.File `arg:"" help:"Input file"`
+		Output     string   `arg:"" optional:"" help:"Output file"`
+		PrivateKey string   `required:"" help:"Private key"`
+	} `cmd:""`
 
 	YAML struct {
-		Input      *os.File `arg help:"Input file"`
-		PrivateKey string   `required help:"Private key"`
-	} `cmd`
+		Input      *os.File `arg:"" help:"Input file"`
+		PrivateKey string   `required:"" help:"Private key"`
+	} `cmd:""`
 
 	Verify struct {
-		Input *os.File `arg optional help:"Input file"`
-	} `cmd`
+		Input *os.File `arg:"" optional:"" help:"Input file"`
+	} `cmd:""`
 
 	Diff struct {
-		Base *os.File `arg help:"Base file"`
-		Dest *os.File `arg help:"Dest file"`
-	} `cmd`
+		Base *os.File `arg:"" help:"Base file"`
+		Dest *os.File `arg:"" help:"Dest file"`
+	} `cmd:""`
 
 	Patch struct {
-		Base *os.File `arg help:"Base file"`
-		Diff *os.File `arg help:"Diff file"`
-	} `cmd`
+		Base *os.File `arg:"" help:"Base file"`
+		Diff *os.File `arg:"" help:"Diff file"`
+	} `cmd:""`
 
 	Add struct {
-	} `cmd`
+	} `cmd:""`
 
 	TUI struct {
-		DataDir string `name:"data" help:"Data directory" default:"~/.dmrs" type:"path"`
+		DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
 		Server  string `help:"Server URL (persisted to the data dir config on first use)"`
-	} `cmd help:"Interactive ratings editor."`
+	} `cmd:"" help:"Interactive ratings editor."`
 }
 
 var CLI cli
 
 // defaultConfigPaths are searched in order; values in later files
 // override earlier ones, and --config overrides them all.
-var defaultConfigPaths = []string{"~/.dmrs/config.yaml", "./dmrs.yaml"}
+var defaultConfigPaths = []string{"~/.revs/config.yaml", "./revs.yaml"}
 
 // newParser builds the CLI parser with config-file support layered in.
 // Precedence, lowest to highest: struct-tag defaults, config files (in
 // configPaths order, then --config), then command-line flags.
 func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 	return kong.New(c,
-		kong.Name("dmrs"),
+		kong.Name("revs"),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
-			"default_server_listen":       dmrs.DefaultServerListen,
-			"default_client_listen":       dmrs.DefaultClientListen,
-			"default_cut_interval":        dmrs.DefaultCutInterval.String(),
-			"default_snapshot_every":      strconv.Itoa(dmrs.DefaultSnapshotEvery),
-			"default_snapshot_chunk_size": strconv.Itoa(dmrs.DefaultSnapshotChunkSize),
+			"default_server_listen":       revs.DefaultServerListen,
+			"default_client_listen":       revs.DefaultClientListen,
+			"default_cut_interval":        revs.DefaultCutInterval.String(),
+			"default_snapshot_every":      strconv.Itoa(revs.DefaultSnapshotEvery),
+			"default_snapshot_chunk_size": strconv.Itoa(revs.DefaultSnapshotChunkSize),
 		},
 	)
 }
@@ -122,7 +122,7 @@ func main() {
 	switch ctx.Command() {
 	case "server":
 		requireDir(CLI.Server.DataDir)
-		dmrs.Start2(CLI.Server.DataDir, dmrs.ServerOptions{
+		revs.Start2(CLI.Server.DataDir, revs.ServerOptions{
 			Listen:            CLI.Server.Listen,
 			CutInterval:       CLI.Server.CutInterval,
 			SnapshotEvery:     CLI.Server.SnapshotEvery,
@@ -130,16 +130,16 @@ func main() {
 		})
 	case "client":
 		requireDir(CLI.Client.DataDir)
-		dmrs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo)
+		revs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo)
 	case "clientserver":
 		requireDir(CLI.ClientServer.DataDir)
-		go dmrs.Start2(CLI.ClientServer.DataDir, dmrs.ServerOptions{
+		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
 			Listen:            CLI.ClientServer.ServerListen,
 			CutInterval:       CLI.ClientServer.CutInterval,
 			SnapshotEvery:     CLI.ClientServer.SnapshotEvery,
 			SnapshotChunkSize: CLI.ClientServer.SnapshotChunkSize,
 		})
-		dmrs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
+		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
 		if err := tui.Run(workspace.Options{DataDir: CLI.TUI.DataDir, ServerFlag: CLI.TUI.Server}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -147,7 +147,7 @@ func main() {
 		}
 
 	case "keygen":
-		u := dmrs.NewUser()
+		u := revs.NewUser()
 		pub, prv := u.Keys()
 
 		fmt.Printf("ID:          %s\n", u.ID)
@@ -163,7 +163,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		if _, err := dmrs.ConvertYAML(data, pk); err != nil {
+		if _, err := revs.ConvertYAML(data, pk); err != nil {
 			panic(err)
 		}
 
@@ -231,7 +231,7 @@ func main() {
 func requireDir(path string) {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "dmrs: data directory %q does not exist\n", path)
+		fmt.Fprintf(os.Stderr, "revs: data directory %q does not exist\n", path)
 		os.Exit(1)
 	}
 }
@@ -243,7 +243,7 @@ func addNewMovie() error {
 	}
 	validate := validator.New()
 
-	var conf dmrs.Example
+	var conf revs.Example
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		return err
 	}
@@ -260,7 +260,7 @@ func addNewMovie() error {
 	}
 	text = strings.TrimSpace(text)
 
-	conf.Titles = append(conf.Titles, dmrs.Title2{
+	conf.Titles = append(conf.Titles, revs.Title2{
 		Name: text,
 	})
 

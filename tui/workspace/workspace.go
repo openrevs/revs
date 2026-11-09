@@ -1,4 +1,4 @@
-// Package workspace owns everything about a dmrs TUI data directory
+// Package workspace owns everything about a revs TUI data directory
 // except the terminal UI itself: the config file, the signing key, the
 // unsigned draft of the user's ratingset, and push/pull orchestration
 // built on the client package. It has no bubbletea dependency and is
@@ -23,8 +23,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/client/fsstore"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/client/fsstore"
 )
 
 const (
@@ -44,7 +44,7 @@ var (
 type Options struct {
 	DataDir string
 	// ServerFlag is the --server value; when set it is persisted to
-	// config.json immediately (set once, then plain `dmrs tui` works).
+	// config.json immediately (set once, then plain `revs tui` works).
 	ServerFlag string
 }
 

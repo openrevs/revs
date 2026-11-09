@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs/tui/workspace"
 )
 
 // titleItem adapts a TitleRef for bubbles/list.

@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -13,9 +13,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/util"
-	jsonlines "github.com/kalafut/sjsonl"
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/util"
+	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 const settingsKey = "settings"

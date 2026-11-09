@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/kalafut/dmrs/sqlc"
+	"github.com/openrevs/revs/sqlc"
 )
 
 func documentFromSqlc(d sqlc.Document) *Document {

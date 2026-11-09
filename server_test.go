@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -168,7 +168,13 @@ func TestPublishingRoundTrip(t *testing.T) {
 
 	// Give the base doc enough lines that a later diff is smaller than the
 	// full document.
-	titles := []string{"Alien", "Blade Runner", "Casablanca", "Dune", "Eraserhead"}
+	// Large enough that a one-title patch (whose header carries full
+	// base/target hashes) is smaller than the full document.
+	titles := []string{
+		"Alien", "Blade Runner", "Casablanca", "Dune", "Eraserhead",
+		"Gattaca", "Heat", "Inception", "Jaws", "Klute",
+		"Laura", "Memento", "Network", "Oldboy", "Psycho",
+	}
 	doc1 := signedDoc(t, u, 1, titles...)
 	doc1Canonical, doc1Hash := canonical(t, doc1)
 

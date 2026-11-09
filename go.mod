@@ -1,4 +1,4 @@
-module github.com/kalafut/dmrs
+module github.com/openrevs/revs
 
 go 1.25.0
 
@@ -12,6 +12,7 @@ require (
 	github.com/dchest/uniuri v1.2.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-playground/validator/v10 v10.12.0
+	github.com/openrevs/sjsonl-go v0.1.0
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/yuin/goldmark v1.4.13
@@ -56,7 +57,6 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/kalafut/sjsonl v0.0.0
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
@@ -69,5 +69,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-replace github.com/kalafut/sjsonl => ../sjsonl

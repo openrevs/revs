@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs/tui/workspace"
 )
 
 // Async sync operations run in tea.Cmds and come back as these

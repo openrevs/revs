@@ -12,19 +12,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/client"
-	"github.com/kalafut/dmrs/client/fsstore"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/client/fsstore"
 	"github.com/stretchr/testify/require"
 )
 
-// startServer runs a real dmrs server over httptest. The client package
+// startServer runs a real revs server over httptest. The client package
 // has no dependency on the server package; this test package uses both,
 // which is exactly the interop being tested.
-func startServer(t *testing.T) (*dmrs.Server, *httptest.Server) {
+func startServer(t *testing.T) (*revs.Server, *httptest.Server) {
 	t.Helper()
 
-	s, err := dmrs.NewServer(t.TempDir())
+	s, err := revs.NewServer(t.TempDir())
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(s.Handler())

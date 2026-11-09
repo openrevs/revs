@@ -41,7 +41,7 @@ func (w *Workspace) GenerateKey() (string, error) {
 }
 
 // ImportKey installs an existing private key given as hex (the
-// `dmrs keygen` "Private key" line) and returns the derived user id.
+// `revs keygen` "Private key" line) and returns the derived user id.
 func (w *Workspace) ImportKey(hexKey string) (string, error) {
 	if w.key != nil {
 		return "", errors.New("workspace: key already exists")

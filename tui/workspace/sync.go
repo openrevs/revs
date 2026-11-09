@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kalafut/dmrs/client"
+	"github.com/openrevs/revs/client"
 )
 
 // PullResult summarizes one pull. Head is the server's current

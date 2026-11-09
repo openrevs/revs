@@ -5,7 +5,7 @@ from Ed25519 to ML-DSA-44. Captured 2026-10-12. Draft.
 
 Prompted by Filippo Valsorda's "Post-Quantum Cryptographic Right
 Answers" (https://words.filippo.io/right-answers/). There are no users
-and nothing to migrate: sjsonl 0.1 and all dmrs keys target ML-DSA-44
+and nothing to migrate: sjsonl 0.1 and all revs keys target ML-DSA-44
 directly. Ed25519 is gone, not deprecated.
 
 ## Algorithm
@@ -68,7 +68,7 @@ document.
   signer's public key. The consumer resolves `kid` to a key it already
   holds. The sjsonl default resolver is the base document's `key`;
   applications may supply others.
-- **dmrs resolves `kid` against the root key and the delegate keys in
+- **revs resolves `kid` against the root key and the delegate keys in
   the current authority line.** Grants keep full delegate public keys:
   they are lines in the document, so each one travels once, when the
   grant is added.
@@ -148,7 +148,7 @@ no cost.
 | Signature | Signer | Context string |
 |---|---|---|
 | sjsonl document (incl. manifests) | author, delegate, or server | `sjsonl-0.1-doc` |
-| dmrs authority payload | root | `dmrs-authority` |
+| revs authority payload | root | `revs-authority` |
 
 The server key only signs manifests, which are sjsonl documents, so it
 needs no context of its own. A future sjsonl API may let applications
@@ -191,7 +191,7 @@ is the time to fix two things:
 - publishing.md: `sigs` artifact, manifest metadata fields, full-length
   hashes, retention of `sigs`, key generation.
 - delegation.md: full-hash owner binding, `kid` resolution via grants,
-  `dmrs-authority` context.
+  `revs-authority` context.
 - Code: keygen and seed storage, sjsonl sign/verify, ingest
   verification.
 

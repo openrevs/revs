@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kalafut/dmrs"
+	"github.com/openrevs/revs"
 )
 
 // parseWith parses args against a parser whose config search path is a
@@ -31,17 +31,17 @@ func parseWith(t *testing.T, configYAML string, args ...string) *cli {
 
 func TestConfigDefaults(t *testing.T) {
 	c := parseWith(t, "", "server")
-	if c.Server.Listen != dmrs.DefaultServerListen {
-		t.Errorf("listen = %q, want %q", c.Server.Listen, dmrs.DefaultServerListen)
+	if c.Server.Listen != revs.DefaultServerListen {
+		t.Errorf("listen = %q, want %q", c.Server.Listen, revs.DefaultServerListen)
 	}
-	if c.Server.CutInterval != dmrs.DefaultCutInterval {
-		t.Errorf("cut interval = %v, want %v", c.Server.CutInterval, dmrs.DefaultCutInterval)
+	if c.Server.CutInterval != revs.DefaultCutInterval {
+		t.Errorf("cut interval = %v, want %v", c.Server.CutInterval, revs.DefaultCutInterval)
 	}
-	if c.Server.SnapshotEvery != dmrs.DefaultSnapshotEvery {
-		t.Errorf("snapshot every = %d, want %d", c.Server.SnapshotEvery, dmrs.DefaultSnapshotEvery)
+	if c.Server.SnapshotEvery != revs.DefaultSnapshotEvery {
+		t.Errorf("snapshot every = %d, want %d", c.Server.SnapshotEvery, revs.DefaultSnapshotEvery)
 	}
-	if c.Server.SnapshotChunkSize != dmrs.DefaultSnapshotChunkSize {
-		t.Errorf("snapshot chunk size = %d, want %d", c.Server.SnapshotChunkSize, dmrs.DefaultSnapshotChunkSize)
+	if c.Server.SnapshotChunkSize != revs.DefaultSnapshotChunkSize {
+		t.Errorf("snapshot chunk size = %d, want %d", c.Server.SnapshotChunkSize, revs.DefaultSnapshotChunkSize)
 	}
 }
 
@@ -68,7 +68,7 @@ server:
 		t.Errorf("snapshot every = %d, want 5", c.Server.SnapshotEvery)
 	}
 	// Unset keys keep their defaults.
-	if c.Server.SnapshotChunkSize != dmrs.DefaultSnapshotChunkSize {
+	if c.Server.SnapshotChunkSize != revs.DefaultSnapshotChunkSize {
 		t.Errorf("snapshot chunk size = %d, want default", c.Server.SnapshotChunkSize)
 	}
 }
@@ -102,7 +102,7 @@ tui:
 	}
 	// The server section must not leak into the client command.
 	c = parseWith(t, cfg, "client")
-	if c.Client.Listen != dmrs.DefaultClientListen {
+	if c.Client.Listen != revs.DefaultClientListen {
 		t.Errorf("client listen = %q, want default", c.Client.Listen)
 	}
 }

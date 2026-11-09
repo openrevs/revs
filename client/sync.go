@@ -9,7 +9,7 @@ import (
 	"maps"
 	"slices"
 
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 // Result summarizes one Sync call.

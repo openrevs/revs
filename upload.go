@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 
 	tmdb "github.com/cyruzin/golang-tmdb"
 	"github.com/go-chi/chi/v5"
-	"github.com/kalafut/dmrs/domain"
-	"github.com/kalafut/dmrs/util"
+	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/util"
 )
 
 func (c *Client) uploadGet(w http.ResponseWriter, r *http.Request) error {

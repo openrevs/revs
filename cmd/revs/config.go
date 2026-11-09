@@ -17,7 +17,7 @@ import (
 //	  listen: ":1323"
 //	  cut-interval: 30m
 //	tui:
-//	  data: ~/.dmrs
+//	  data: ~/.revs
 //
 // Keys match flag names; underscores may be used in place of hyphens.
 // Kong only consults resolvers for flags not given on the command

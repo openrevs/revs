@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kalafut/dmrs"
-	"github.com/kalafut/dmrs/tui/workspace"
+	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/tui/workspace"
 )
 
 // Headless smoke test: drives the tea.Model directly (no TTY) through
@@ -17,7 +17,7 @@ import (
 
 func startServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	s, err := dmrs.NewServer(t.TempDir())
+	s, err := revs.NewServer(t.TempDir())
 	require.NoError(t, err)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)

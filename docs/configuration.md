@@ -4,8 +4,8 @@ Every CLI flag can also be set in a config file. Precedence, lowest to
 highest:
 
 1. Built-in defaults
-2. `~/.dmrs/config.yaml`
-3. `./dmrs.yaml` (current directory)
+2. `~/.revs/config.yaml`
+3. `./revs.yaml` (current directory)
 4. A file given with `--config FILE`
 5. Flags on the command line
 
@@ -14,9 +14,9 @@ ad hoc — useful for running several servers or TUIs at once when testing
 sync:
 
 ```sh
-dmrs server --data /tmp/s1 --listen :9001 &
-dmrs server --data /tmp/s2 --listen :9002 &
-dmrs tui --data /tmp/t1 --server http://localhost:9001
+revs server --data /tmp/s1 --listen :9001 &
+revs server --data /tmp/s2 --listen :9002 &
+revs tui --data /tmp/t1 --server http://localhost:9001
 ```
 
 ## File format
@@ -27,25 +27,25 @@ in place of hyphens (`cut-interval` or `cut_interval`).
 
 ```yaml
 server:
-  data: /var/dmrs            # --data
+  data: /var/revs            # --data
   listen: ":1323"            # --listen
   cut-interval: 30m          # --cut-interval
   snapshot-every: 100        # --snapshot-every
   snapshot-chunk-size: 268435456  # --snapshot-chunk-size
 
 client:
-  data: /var/dmrs
+  data: /var/revs
   listen: ":1324"
   demo: false
 
 clientserver:
-  data: /var/dmrs
+  data: /var/revs
   server-listen: ":1323"
   client-listen: ":1324"
   cut-interval: 30m
 
 tui:
-  data: ~/.dmrs              # data directory / state location
+  data: ~/.revs              # data directory / state location
   server: https://ratings.example.com
 ```
 

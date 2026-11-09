@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/kalafut/dmrs/sqlc"
+	"github.com/openrevs/revs/sqlc"
 )
-
 
 func (u *DAL) UserRatings(ctx context.Context, id int) ([]*Rating, error) {
 	rows, err := u.q.UserRatings(ctx, id)

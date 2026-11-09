@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/go-playground/validator/v10"
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"gopkg.in/yaml.v2"
 )
 

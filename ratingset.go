@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
 )
 

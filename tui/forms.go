@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/kalafut/dmrs"
+	"github.com/openrevs/revs"
 )
 
 func textinputBlink() tea.Cmd { return textinput.Blink }
@@ -26,7 +26,7 @@ type titleForm struct {
 	err     string
 }
 
-func newTitleForm(editIdx int, t *dmrs.Title2) *titleForm {
+func newTitleForm(editIdx int, t *revs.Title2) *titleForm {
 	f := &titleForm{editIdx: editIdx}
 
 	f.name = textinput.New()
@@ -189,7 +189,7 @@ type reviewForm struct {
 	err       string
 }
 
-func newReviewForm(titleIdx, reviewIdx int, r *dmrs.Review2, user dmrs.User2) *reviewForm {
+func newReviewForm(titleIdx, reviewIdx int, r *revs.Review2, user revs.User2) *reviewForm {
 	f := &reviewForm{
 		titleIdx:  titleIdx,
 		reviewIdx: reviewIdx,
@@ -245,8 +245,8 @@ func (f *reviewForm) setFocus(i int) tea.Cmd {
 }
 
 // review validates and assembles the Review2 the form describes.
-func (f *reviewForm) review() (dmrs.Review2, error) {
-	var r dmrs.Review2
+func (f *reviewForm) review() (revs.Review2, error) {
+	var r revs.Review2
 
 	if d := strings.TrimSpace(f.date.Value()); d != "" {
 		if _, err := time.Parse("2006-01-02", d); err != nil {

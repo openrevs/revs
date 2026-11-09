@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	jsonlines "github.com/kalafut/sjsonl"
+	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 // PushResult summarizes one Push call. Pushed is false when the content

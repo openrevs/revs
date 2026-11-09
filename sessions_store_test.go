@@ -1,4 +1,4 @@
-package dmrs
+package revs
 
 import (
 	"testing"
