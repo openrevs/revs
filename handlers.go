@@ -2,6 +2,7 @@ package revs
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -79,6 +80,14 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		}
 		writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 		return
+	}
+
+	if s.publishOnUpload {
+		// The document is accepted either way; a failed cut is retried
+		// by the periodic cutter, so it doesn't fail the upload.
+		if _, err := s.Cut(req.Context()); err != nil {
+			slog.Error("publish on upload: epoch cut failed", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, uploadResponse{Status: "accepted", Rev: user.Revision, Hash: info.Hash})

@@ -41,6 +41,7 @@ type cli struct {
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+		PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
 	} `cmd:"" group:"servers" help:"Run a ratings publishing server"`
 
 	Client struct {
@@ -57,6 +58,7 @@ type cli struct {
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+		PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
 	} `cmd:"" name:"clientserver" group:"servers" help:"Run the web client and a server together"`
 
 	Sign struct {
@@ -145,6 +147,7 @@ func main() {
 			CutInterval:       CLI.Server.CutInterval,
 			SnapshotEvery:     CLI.Server.SnapshotEvery,
 			SnapshotChunkSize: CLI.Server.SnapshotChunkSize,
+			PublishOnUpload:   CLI.Server.PublishOnUpload,
 		})
 	case "client":
 		requireDir(CLI.Client.DataDir)
@@ -156,6 +159,7 @@ func main() {
 			CutInterval:       CLI.ClientServer.CutInterval,
 			SnapshotEvery:     CLI.ClientServer.SnapshotEvery,
 			SnapshotChunkSize: CLI.ClientServer.SnapshotChunkSize,
+			PublishOnUpload:   CLI.ClientServer.PublishOnUpload,
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
