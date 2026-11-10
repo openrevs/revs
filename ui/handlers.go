@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,8 +25,16 @@ import (
 	"github.com/openrevs/revs/ui/remotedb"
 )
 
-// networkTimeout bounds a push, pull, or search.
+// networkTimeout bounds a push or pull.
 const networkTimeout = 2 * time.Minute
+
+// Wikidata search timeouts: searchTimeout normally, and the shorter
+// stockSearchTimeout when the built-in list already has matches to
+// show. Variables so tests can shorten them.
+var (
+	searchTimeout      = 15 * time.Second
+	stockSearchTimeout = 4 * time.Second
+)
 
 // maxImportSize bounds an uploaded import file.
 const maxImportSize = 64 << 20
@@ -145,17 +154,35 @@ func (a *App) moviesList(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// wikidataSearch runs a search for the movie forms; failures are shown
-// in the page rather than failing it.
+// wikidataSearch runs a search for the movie forms. Matches from the
+// built-in stock list come first, followed by any other Wikidata hits.
+// A Wikidata failure (e.g. when offline) is returned as a message to
+// show alongside whatever the stock list found, never as an error.
 func (a *App) wikidataSearch(ctx context.Context, q string) ([]WikidataResult, string) {
 	if q == "" {
 		return nil, ""
 	}
-	ctx, cancel := context.WithTimeout(ctx, networkTimeout)
+	results := searchStock(q)
+
+	timeout := searchTimeout
+	if len(results) > 0 {
+		timeout = stockSearchTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	results, err := a.wikidata.Search(ctx, q)
+	remote, err := a.wikidata.Search(ctx, q)
 	if err != nil {
-		return nil, err.Error()
+		log.Printf("wikidata search %q: %v", q, err)
+		var uerr *url.Error
+		if errors.As(err, &uerr) || errors.Is(err, context.DeadlineExceeded) {
+			return results, "Couldn't reach Wikidata; you may be offline."
+		}
+		return results, err.Error()
+	}
+	for _, r := range remote {
+		if !slices.ContainsFunc(results, func(s WikidataResult) bool { return s.ID == r.ID }) {
+			results = append(results, r)
+		}
 	}
 	return results, ""
 }

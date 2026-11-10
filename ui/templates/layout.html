@@ -62,7 +62,8 @@
 
 {{/* Wikidata results; each posts a movie form to .Action. */}}
 {{define "wikidata-results"}}
-{{if .SearchErr}}<p class="flash flash-error">Wikidata search failed: {{.SearchErr}}</p>{{end}}
+{{if .SearchErr}}{{if .Results}}<p class="muted">Showing built-in matches only. Wikidata search failed: {{.SearchErr}}</p>
+{{else}}<p class="flash flash-error">Wikidata search failed: {{.SearchErr}} You can still enter the details yourself.</p>{{end}}{{end}}
 {{if .Query}}{{if not .Results}}{{if not .SearchErr}}<p class="muted">No films found on Wikidata for “{{.Query}}”.</p>{{end}}{{end}}{{end}}
 {{if .Results}}
 <ul class="results">
