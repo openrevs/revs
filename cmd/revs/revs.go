@@ -31,76 +31,156 @@ import (
 // cli is the full command-line grammar. Every flag can also be set in a
 // YAML config file under a section named for its command (see
 // docs/configuration.md); flags given on the command line win.
+//
+// Each command's help tag is its one-line summary in the command list;
+// the Help method on its type supplies the longer text shown by
+// "revs <command> --help" and on usage errors.
 type cli struct {
 	Config kong.ConfigFlag `help:"Load configuration from a file (overrides the default config paths)." placeholder:"FILE"`
 
-	TUI struct {
-		DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
-		Server  string `help:"Server URL (persisted to the data dir config on first use)"`
-	} `cmd:"" group:"common" help:"Edit your ratings interactively"`
+	TUI    tuiCmd    `cmd:"" group:"common" help:"Edit your ratings interactively"`
+	UI     uiCmd     `cmd:"" name:"ui" group:"common" help:"Manage your movies and reviews in a local web UI"`
+	Keygen keygenCmd `cmd:"" group:"common" help:"Generate a new identity keypair"`
 
-	UI struct {
-		DataDir   string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
-		Listen    string `help:"HTTP listen address" default:"${default_ui_listen}"`
-		NoBrowser bool   `help:"Don't open a web browser"`
-	} `cmd:"" name:"ui" group:"common" help:"Manage your movies and reviews in a local web UI"`
+	Server       serverCmd       `cmd:"" group:"servers" help:"Run a ratings publishing server"`
+	Client       clientCmd       `cmd:"" group:"servers" help:"Run the local web client"`
+	ClientServer clientServerCmd `cmd:"" name:"clientserver" group:"servers" help:"Run the web client and a server together"`
 
-	Keygen struct {
-	} `cmd:"" group:"common" help:"Generate a new identity keypair"`
+	Sign   signCmd   `cmd:"" group:"documents" help:"Sign a ratings document"`
+	Verify verifyCmd `cmd:"" group:"documents" help:"Check a signed document's signature"`
+	Diff   diffCmd   `cmd:"" group:"documents" help:"Create a patch from one document to another"`
+	Patch  patchCmd  `cmd:"" group:"documents" help:"Apply a patch to a document"`
 
-	Server struct {
-		DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
-		Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
-		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-		PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
-	} `cmd:"" group:"servers" help:"Run a ratings publishing server"`
+	YAML yamlCmd `cmd:"" group:"dev" help:"Convert a YAML ratings file to a signed document"`
+	Add  addCmd  `cmd:"" group:"dev" help:"Add a title to data.yaml (prints the result)"`
+}
 
-	Client struct {
-		DataDir string `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
-		Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
-		Demo    bool   `help:"Insert demo data"`
-	} `cmd:"" group:"servers" help:"Run the local web client"`
+type tuiCmd struct {
+	DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+	Server  string `help:"Server URL (persisted to the data dir config on first use)"`
+}
 
-	ClientServer struct {
-		DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
-		ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
-		ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
-		Demo              bool          `help:"Insert demo data"`
-		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-		SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-		PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
-	} `cmd:"" name:"clientserver" group:"servers" help:"Run the web client and a server together"`
+func (tuiCmd) Help() string {
+	return "Opens a full-screen terminal editor for your ratings. Your ratings and " +
+		"identity are kept in the data directory; with --server, changes are synced " +
+		"to that publishing server."
+}
 
-	Sign struct {
-		Input      *os.File `arg:"" help:"Input file"`
-		Output     string   `arg:"" optional:"" help:"Output file"`
-		PrivateKey string   `required:"" help:"Private key"`
-	} `cmd:"" group:"documents" help:"Sign a ratings document"`
+type uiCmd struct {
+	DataDir   string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+	Listen    string `help:"HTTP listen address" default:"${default_ui_listen}"`
+	NoBrowser bool   `help:"Don't open a web browser"`
+}
 
-	Verify struct {
-		Input *os.File `arg:"" optional:"" help:"Input file (default: stdin)"`
-	} `cmd:"" group:"documents" help:"Check a signed document's signature"`
+func (uiCmd) Help() string {
+	return "Starts a web UI on a local address and opens it in your browser. " +
+		"It uses the same data directory as the TUI. Stop it with Ctrl-C."
+}
 
-	Diff struct {
-		Base *os.File `arg:"" help:"Base file"`
-		Dest *os.File `arg:"" help:"Dest file"`
-	} `cmd:"" group:"documents" help:"Create a patch from one document to another"`
+type keygenCmd struct{}
 
-	Patch struct {
-		Base *os.File `arg:"" help:"Base file"`
-		Diff *os.File `arg:"" help:"Diff file"`
-	} `cmd:"" group:"documents" help:"Apply a patch to a document"`
+func (keygenCmd) Help() string {
+	return "Prints a new ID, public key and private key. Nothing is saved: keep " +
+		"the private key somewhere safe and pass it to commands that sign, " +
+		"such as \"revs sign --private-key KEY\"."
+}
 
-	YAML struct {
-		Input      *os.File `arg:"" help:"Input file"`
-		PrivateKey string   `required:"" help:"Private key"`
-	} `cmd:"" group:"dev" help:"Convert a YAML ratings file to a signed document"`
+type serverCmd struct {
+	DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
+	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
+}
 
-	Add struct {
-	} `cmd:"" group:"dev" help:"Add a title to data.yaml (prints the result)"`
+func (serverCmd) Help() string {
+	return "Accepts signed ratings documents and periodically publishes them as an " +
+		"epoch, with a full snapshot every --snapshot-every epochs. The data " +
+		"directory holds the server's identity key, its document store and the " +
+		"published tree; back it up to keep the server's identity."
+}
+
+type clientCmd struct {
+	DataDir string `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
+	Demo    bool   `help:"Insert demo data"`
+}
+
+func (clientCmd) Help() string {
+	return "Serves the web client from the given data directory."
+}
+
+type clientServerCmd struct {
+	DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
+	ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
+	Demo              bool          `help:"Insert demo data"`
+	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	PublishOnUpload   bool          `help:"Publish an epoch immediately after each accepted upload (for testing)"`
+}
+
+func (clientServerCmd) Help() string {
+	return "Runs \"revs server\" and \"revs client\" in one process, sharing a data " +
+		"directory. Handy for local development."
+}
+
+type signCmd struct {
+	Input      *os.File `arg:"" help:"JSONL document to sign (\"-\" for stdin)"`
+	Output     string   `arg:"" optional:"" help:"Where to write the signed document (default: stdout)"`
+	PrivateKey string   `required:"" placeholder:"KEY" help:"Private key to sign with (from \"revs keygen\")"`
+}
+
+func (signCmd) Help() string {
+	return "Signs a JSONL ratings document with your private key. If the input is " +
+		"already signed, its old signature line is replaced, so an edited document " +
+		"can simply be signed again. Check the result with \"revs verify\"."
+}
+
+type verifyCmd struct {
+	Input *os.File `arg:"" optional:"" help:"Signed document to check (default: stdin)"`
+}
+
+func (verifyCmd) Help() string {
+	return "Checks that a signed document is intact and was signed by the key it " +
+		"names, then prints its hash and signer ID. Exits non-zero if the check fails."
+}
+
+type diffCmd struct {
+	Base *os.File `arg:"" help:"Original document"`
+	Dest *os.File `arg:"" help:"Updated document"`
+}
+
+func (diffCmd) Help() string {
+	return "Prints a patch that turns <base> into <dest>. Apply it with \"revs patch\"."
+}
+
+type patchCmd struct {
+	Base *os.File `arg:"" help:"Original document"`
+	Diff *os.File `arg:"" help:"Patch from \"revs diff\""`
+}
+
+func (patchCmd) Help() string {
+	return "Applies a patch made by \"revs diff\" to <base> and prints the result."
+}
+
+type yamlCmd struct {
+	Input      *os.File `arg:"" help:"YAML ratings file"`
+	PrivateKey string   `required:"" placeholder:"KEY" help:"Private key to sign with (from \"revs keygen\")"`
+}
+
+func (yamlCmd) Help() string {
+	return "Converts a YAML ratings file (like data.yaml) to a JSONL document, signs " +
+		"it, and prints the result."
+}
+
+type addCmd struct{}
+
+func (addCmd) Help() string {
+	return "Prompts for a movie title, adds it to ./data.yaml in memory, and prints " +
+		"the resulting YAML. The file itself is not changed."
 }
 
 var CLI cli
@@ -129,6 +209,8 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.Description(tagline),
 		kong.ExplicitGroups(commandGroups),
 		kong.ConfigureHelp(kong.HelpOptions{Compact: true, FlagsLast: true}),
+		// On a usage error, show the command's help above the error.
+		kong.UsageOnError(),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
 			"default_server_listen":       revs.DefaultServerListen,
