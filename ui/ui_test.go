@@ -3,7 +3,6 @@ package ui
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -90,7 +89,7 @@ func TestCollectionCRUD(t *testing.T) {
 	require.Equal(t, "/movies/1", loc)
 	require.Contains(t, msg, "Added Pulp Fiction")
 
-	m, err := u.app.q.GetMovie(ctx, 1)
+	m, err := u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "tt0110912", *m.ImdbID)
 	require.Equal(t, "680", *m.TmdbID)
@@ -106,7 +105,7 @@ func TestCollectionCRUD(t *testing.T) {
 	loc, _ = u.post("/movies/1/viewings", url.Values{"viewed_on": {"yesterday"}, "rating": {"7"}})
 	require.Empty(t, loc, "invalid viewing re-renders the form")
 
-	vs, err := u.app.q.ListViewingsForMovie(ctx, 1)
+	vs, err := u.app.c.Viewings(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, vs, 2)
 	require.Nil(t, vs[0].Rating, "newest first, unrated")
@@ -116,7 +115,7 @@ func TestCollectionCRUD(t *testing.T) {
 	require.Contains(t, page, "★★★★★")
 
 	u.post("/viewings/2", url.Values{"viewed_on": {"2025-01-02"}, "rating": {"0"}, "review": {""}})
-	v, err := u.app.q.GetViewing(ctx, 2)
+	v, err := u.app.c.Viewing(ctx, 2)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), *v.Rating)
 
@@ -125,13 +124,13 @@ func TestCollectionCRUD(t *testing.T) {
 	require.Contains(t, u.get("/history"), "2025-01-02")
 
 	u.post("/movies/1", url.Values{"title": {"Pulp Fiction"}, "year": {"1994"}})
-	m, err = u.app.q.GetMovie(ctx, 1)
+	m, err = u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Nil(t, m.ImdbID, "cleared ids are removed")
 
 	loc, _ = u.post("/movies/1/delete", nil)
 	require.Equal(t, "/movies", loc)
-	all, err := u.app.q.AllViewings(ctx)
+	all, err := u.app.c.AllViewings(ctx)
 	require.NoError(t, err)
 	require.Empty(t, all, "viewings are deleted with their movie")
 }
@@ -141,16 +140,16 @@ func TestIdentity(t *testing.T) {
 	ctx := context.Background()
 
 	u.post("/identity/generate", nil)
-	first := u.app.userID(ctx)
+	first := u.app.c.UserID(ctx)
 	require.Len(t, first, 64)
 
 	// Replacing requires confirmation.
 	_, msg := u.post("/identity/generate", nil)
 	require.Contains(t, msg, "already have a key")
-	require.Equal(t, first, u.app.userID(ctx))
+	require.Equal(t, first, u.app.c.UserID(ctx))
 
 	u.post("/identity/generate", url.Values{"confirm_replace": {"yes"}})
-	require.NotEqual(t, first, u.app.userID(ctx))
+	require.NotEqual(t, first, u.app.c.UserID(ctx))
 
 	_, msg = u.post("/identity/import", url.Values{"private_key": {"nope"}, "confirm_replace": {"yes"}})
 	require.Contains(t, msg, "private key must be")
@@ -196,14 +195,14 @@ func TestPushPull(t *testing.T) {
 	require.Contains(t, bob.get("/movies/1"), "In space no one can hear you scream.")
 	page := alice.get("/movies/1")
 	require.Contains(t, page, "★★★☆☆")
-	require.Contains(t, page, bob.app.userID(ctx)[:12])
+	require.Contains(t, page, bob.app.c.UserID(ctx)[:12])
 
 	// Alice's page of Bob lists his movie.
-	require.Contains(t, alice.get("/servers/1/users/"+bob.app.userID(ctx)), "alien")
+	require.Contains(t, alice.get("/servers/1/users/"+bob.app.c.UserID(ctx)), "alien")
 
 	// A second device with Alice's key: its push is stale until it
 	// merges Alice's published copy.
-	key := alice.app.setting(ctx, settingPrivateKey)
+	key := alice.app.c.PrivateKeyText(ctx)
 	alice2 := newTestUI(t)
 	alice2.post("/identity/import", url.Values{"private_key": {key}})
 	alice2.post("/servers", url.Values{"url": {sts.URL}})
@@ -225,7 +224,7 @@ func TestPushPull(t *testing.T) {
 
 	// Removing the server deletes its database.
 	alice.post("/servers/1/delete", nil)
-	servers, err := alice.app.q.ListServers(ctx)
+	servers, err := alice.app.c.Servers(ctx)
 	require.NoError(t, err)
 	require.Empty(t, servers)
 }
@@ -261,7 +260,7 @@ func TestExportImport(t *testing.T) {
 	require.NoError(t, err)
 	user, _, err := revs.ParseRatingset(doc)
 	require.NoError(t, err)
-	require.Equal(t, u.app.userID(ctx), user.ID)
+	require.Equal(t, u.app.c.UserID(ctx), user.ID)
 	require.Equal(t, 1, user.Revision)
 
 	// Unchanged content keeps its revision; a change bumps it.
@@ -277,7 +276,7 @@ func TestExportImport(t *testing.T) {
 	other := newTestUI(t)
 	_, msg := other.upload(doc)
 	require.Contains(t, msg, "Imported 2 new movies (0 already present) and 1 new viewings")
-	all, err := other.app.q.AllMovies(ctx)
+	all, err := other.app.c.AllMovies(ctx)
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 
@@ -306,7 +305,7 @@ func TestImportUnsignedDraft(t *testing.T) {
 	require.Contains(t, msg, "Imported 1 new movies (0 already present) and 2 new viewings")
 	require.Contains(t, msg, "Skipped 1 non-movie titles")
 
-	m, err := u.app.q.GetMovie(ctx, 1)
+	m, err := u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "680", *m.TmdbID)
 	require.Equal(t, "tt0110912", *m.ImdbID)
@@ -314,7 +313,7 @@ func TestImportUnsignedDraft(t *testing.T) {
 	// A later import matching by id fills in missing ids.
 	_, msg = u.upload([]byte(`{"name":"Pulp Fiction (1994)","refs":{"imdb":"tt0110912","wikidata":"Q104123"}}`))
 	require.Contains(t, msg, "0 new movies (1 already present)")
-	m, err = u.app.q.GetMovie(ctx, 1)
+	m, err = u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "Q104123", *m.WikidataID)
 	require.Equal(t, "Pulp Fiction", m.Title, "an existing title is kept")
@@ -338,94 +337,20 @@ func (u *testUI) upload(data []byte) (string, string) {
 	return resp.Header.Get("Location"), msg
 }
 
-func TestWikidataSearch(t *testing.T) {
-	claim := func(v any) map[string]any {
-		raw, _ := json.Marshal(v)
-		return map[string]any{"mainsnak": map[string]any{"datavalue": map[string]any{"value": json.RawMessage(raw)}}}
-	}
-	class := func(id string) any { return []any{claim(map[string]string{"id": id})} }
-	label := func(lang, v string) map[string]any { return map[string]any{lang: map[string]string{"value": v}} }
-
-	ids := []string{"Q104123", "Q999", "Q5", "Q7", "Q8", "Q9"}
-	wd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Contains(t, r.Header.Get("User-Agent"), "revs-ui")
-		switch r.URL.Query().Get("action") {
-		case "query":
-			// The query is restricted to film items in the search itself.
-			sr := r.URL.Query().Get("srsearch")
-			require.True(t, strings.HasPrefix(sr, "pulp fiction haswbstatement:P4947|"), sr)
-			require.Contains(t, sr, "|P31=Q11424")
-			var hits []map[string]string
-			for _, id := range ids {
-				hits = append(hits, map[string]string{"title": id})
-			}
-			json.NewEncoder(w).Encode(map[string]any{"query": map[string]any{"search": hits}})
-		case "wbgetentities":
-			require.Equal(t, strings.Join(ids, "|"), r.URL.Query().Get("ids"))
-			json.NewEncoder(w).Encode(map[string]any{"entities": map[string]any{
-				// Its label is only in "mul", as on the real item.
-				"Q104123": map[string]any{
-					"labels":       label("mul", "Pulp Fiction"),
-					"descriptions": label("en", "1994 film by Quentin Tarantino"),
-					"claims": map[string]any{
-						"P31":   class("Q11424"),
-						"P345":  []any{claim("tt0110912")},
-						"P4947": []any{claim("680")},
-						"P577":  []any{claim(map[string]string{"time": "+1994-10-14T00:00:00Z"}), claim(map[string]string{"time": "+1994-05-21T00:00:00Z"})},
-					},
-				},
-				// A soundtrack album: not a film.
-				"Q999": map[string]any{"labels": label("en", "Pulp Fiction (soundtrack)"), "claims": map[string]any{"P31": class("Q482994")}},
-				// Unknown class but a TMDB movie id; labelled only in French.
-				"Q5": map[string]any{"labels": label("fr", "Fiction pulpeuse"), "claims": map[string]any{"P4947": []any{claim("12345")}}},
-				// A TV special with a TMDB movie id: not a movie.
-				"Q7": map[string]any{"labels": label("en", "Pulp Fiction Special"), "claims": map[string]any{"P31": class("Q1261214"), "P4947": []any{claim("777")}}},
-				// A video game with an IMDb id: not a movie.
-				"Q8": map[string]any{"labels": label("en", "Pulp Fiction: The Game"), "claims": map[string]any{"P31": class("Q7889"), "P345": []any{claim("tt7777777")}}},
-				// A TV series with an IMDb id and no class we know: not a movie.
-				"Q9": map[string]any{"labels": label("en", "Pulp Fiction: The Series"), "claims": map[string]any{"P345": []any{claim("tt8888888")}}},
-			}})
-		default:
-			t.Errorf("unexpected action %q", r.URL.Query().Get("action"))
-		}
-	}))
-	t.Cleanup(wd.Close)
-
+func TestSearchPage(t *testing.T) {
+	// Wikidata unreachable: the page shows built-in matches and a note.
+	wd := httptest.NewServer(http.NotFoundHandler())
+	wd.Close()
 	u := newTestUI(t, func(o *Options) { o.WikidataURL = wd.URL })
-	results, err := u.app.wikidata.Search(context.Background(), "  pulp   fiction ")
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	require.Equal(t, "Q104123", results[0].ID)
-	require.Equal(t, "Pulp Fiction", results[0].Title)
-	require.Equal(t, int64(1994), *results[0].Year)
-	require.Equal(t, "tt0110912", *results[0].IMDB)
-	require.Equal(t, "680", *results[0].TMDB)
-	require.Equal(t, "Q5", results[1].ID)
-	require.Equal(t, "Fiction pulpeuse", results[1].Title)
 
-	page := u.get("/movies/new?q=pulp+fiction")
-	require.Contains(t, page, "1994 film by Quentin Tarantino")
-	for _, absent := range []string{"soundtrack", "Special", "The Game", "The Series"} {
-		require.NotContains(t, page, absent)
-	}
-}
+	page := u.get("/movies/new?q=the+matrix")
+	require.Contains(t, page, "tt0133093")
+	require.Contains(t, page, "Showing built-in matches only")
+	require.Contains(t, page, "you may be offline")
+	require.NotContains(t, page, "flash-error")
 
-func TestNormalizeIDs(t *testing.T) {
-	for in, want := range map[string]string{
-		"tt0110912": "tt0110912", "https://www.imdb.com/title/tt0110912/?ref=x": "tt0110912",
-	} {
-		require.Equal(t, want, deref(normalizeIMDB(in)), in)
-	}
-	for in, want := range map[string]string{
-		"680": "680", "680-pulp-fiction": "680", "https://www.themoviedb.org/movie/680-pulp-fiction": "680", "abc": "",
-	} {
-		require.Equal(t, want, deref(normalizeTMDB(in)), in)
-	}
-	for in, want := range map[string]string{
-		"Q104123": "Q104123", "q104123": "Q104123", "https://www.wikidata.org/wiki/Q104123": "Q104123", "x": "",
-	} {
-		require.Equal(t, want, deref(normalizeWikidata(in)), in)
-	}
+	page = u.get("/movies/new?q=no+such+film")
+	require.Contains(t, page, "enter the details yourself")
 }
 
 func TestLoopbackHost(t *testing.T) {
@@ -449,7 +374,7 @@ func TestLoopbackHost(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Empty(t, app.userID(context.Background()))
+	require.Empty(t, app.c.UserID(context.Background()))
 }
 
 func TestRevisionsSharedAcrossServers(t *testing.T) {

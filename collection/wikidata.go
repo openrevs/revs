@@ -1,4 +1,4 @@
-package ui
+package collection
 
 import (
 	"context"
@@ -56,8 +56,8 @@ var nonFilmClasses = map[string]bool{
 	"Q482994":   true, // album
 }
 
-// WikidataResult is one candidate movie from a search.
-type WikidataResult struct {
+// SearchResult is one candidate movie from a search, with ids from Wikidata.
+type SearchResult struct {
 	ID          string
 	Title       string
 	Description string
@@ -77,7 +77,7 @@ type wikidata struct {
 // like "star wars" its hits are almost all games and albums. Items
 // are checked again after fetching, which also drops TV series,
 // games, and franchises that carry a film statement by mistake.
-func (w *wikidata) Search(ctx context.Context, query string) ([]WikidataResult, error) {
+func (w *wikidata) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	query = strings.Join(strings.Fields(query), " ")
 	if query == "" {
 		return nil, nil
@@ -124,7 +124,7 @@ func (w *wikidata) Search(ctx context.Context, query string) ([]WikidataResult, 
 		return nil, err
 	}
 
-	var results []WikidataResult
+	var results []SearchResult
 	for _, id := range ids { // keep search relevance order
 		e, ok := entities.Entities[id]
 		if !ok {
@@ -132,7 +132,7 @@ func (w *wikidata) Search(ctx context.Context, query string) ([]WikidataResult, 
 		}
 		r := e.result(id)
 		if r.isFilm {
-			results = append(results, r.WikidataResult)
+			results = append(results, r.SearchResult)
 		}
 	}
 	return results, nil
@@ -196,7 +196,7 @@ func (e wdEntity) strings(prop string) []string {
 }
 
 type wdCandidate struct {
-	WikidataResult
+	SearchResult
 	isFilm bool
 }
 
@@ -221,7 +221,7 @@ func firstNonEmpty(ss ...string) string {
 }
 
 func (e wdEntity) result(id string) wdCandidate {
-	c := wdCandidate{WikidataResult: WikidataResult{
+	c := wdCandidate{SearchResult: SearchResult{
 		ID:          id,
 		Title:       firstNonEmpty(e.Labels["en"].Value, e.Labels["mul"].Value, anyValue(e.Labels), id),
 		Description: firstNonEmpty(e.Descriptions["en"].Value, e.Descriptions["mul"].Value),

@@ -4,169 +4,80 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/openrevs/revs/tui/workspace"
 )
 
-// titleItem adapts a TitleRef for bubbles/list.
-type titleItem struct {
-	ref workspace.TitleRef
+// cursor is a selection in a scrolling list of n items.
+type cursor struct {
+	i   int // selected item
+	top int // first visible item
 }
 
-func (i titleItem) Title() string {
-	t := i.ref.Title
-	s := t.Name
-	if t.Year != nil {
-		s += fmt.Sprintf(" (%d)", *t.Year)
-	}
-	if t.Type != nil && *t.Type != "" {
-		s += " [" + *t.Type + "]"
-	}
-	return s
-}
-
-func (i titleItem) Description() string {
-	t := i.ref.Title
-	latest := workspace.LatestReview(t)
-	if latest == nil {
-		return "no reviews"
-	}
-	parts := []string{}
-	if latest.Rating != nil {
-		parts = append(parts, fmt.Sprintf("rated %d", *latest.Rating))
-	} else {
-		parts = append(parts, "no rating")
-	}
-	if latest.Date != nil {
-		parts = append(parts, *latest.Date)
-	}
-	if n := len(t.Reviews); n > 1 {
-		parts = append(parts, fmt.Sprintf("%d reviews", n))
-	}
-	return strings.Join(parts, " · ")
-}
-
-func (i titleItem) FilterValue() string { return i.ref.Title.Name }
-
-func (a *app) newList() {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "My movies"
-	l.SetShowHelp(true)
-	l.DisableQuitKeybindings()
-	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{
-			key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
-			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-			key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "push")),
-			key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "pull")),
-		}
-	}
-	a.list = l
-}
-
-// refreshList rebuilds the items from the workspace, keeping the
-// cursor near where it was.
-func (a *app) refreshList() {
-	sel := a.list.Index()
-	items := []list.Item{}
-	for _, ref := range a.ws.Titles() {
-		items = append(items, titleItem{ref: ref})
-	}
-	a.list.SetItems(items)
-	if sel >= len(items) {
-		sel = len(items) - 1
-	}
-	if sel >= 0 {
-		a.list.Select(sel)
-	}
-}
-
-func (a *app) selectedTitle() (workspace.TitleRef, bool) {
-	item, ok := a.list.SelectedItem().(titleItem)
+// move handles a navigation key, reporting whether it was one.
+func (c *cursor) move(msg tea.Msg, n, page int) bool {
+	k, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return workspace.TitleRef{}, false
+		return false
 	}
-	return item.ref, true
+	switch k.String() {
+	case "up", "k":
+		c.i--
+	case "down", "j":
+		c.i++
+	case "pgup", "ctrl+u":
+		c.i -= max(page, 1)
+	case "pgdown", "ctrl+d":
+		c.i += max(page, 1)
+	case "home", "g":
+		c.i = 0
+	case "end", "G":
+		c.i = n - 1
+	default:
+		return false
+	}
+	c.clamp(n)
+	return true
 }
 
-func (a *app) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok && a.list.FilterState() != list.Filtering {
-		switch key.String() {
-		case "q":
-			return a, tea.Quit
-		case "enter":
-			if ref, ok := a.selectedTitle(); ok {
-				a.detailIdx = ref.Index
-				a.reviewCur = 0
-				a.screen = screenDetail
-			}
-			return a, nil
-		case "a":
-			a.titleForm = newTitleForm(-1, nil)
-			a.screen = screenTitleForm
-			return a, textinput.Blink
-		case "d":
-			if ref, ok := a.selectedTitle(); ok {
-				idx := ref.Index
-				a.confirm = &confirmState{
-					prompt: fmt.Sprintf("Delete %q and all its reviews?", ref.Title.Name),
-					do: func() (string, error) {
-						if err := a.ws.DeleteTitle(idx); err != nil {
-							return "", err
-						}
-						return "deleted " + ref.Title.Name, nil
-					},
-					back: screenList,
-				}
-				a.screen = screenConfirm
-			}
-			return a, nil
-		case "s":
-			return a.startSync(pushCmd(a.ws))
-		case "u":
-			return a.startSync(pullCmd(a.ws))
+func (c *cursor) clamp(n int) {
+	c.i = min(max(c.i, 0), max(n-1, 0))
+}
+
+// render draws the visible part of a list of n items in height lines,
+// each item one line, scrolling to keep the selection in view. line
+// renders item i; selected marks the cursor's item.
+func (c *cursor) render(n, height int, line func(i int, selected bool) string) string {
+	if n == 0 {
+		return ""
+	}
+	c.clamp(n)
+	height = max(height, 1)
+	more := n > height
+	if more {
+		height = max(height-1, 1) // room for the "more" line
+	}
+	if c.i < c.top {
+		c.top = c.i
+	}
+	if c.i >= c.top+height {
+		c.top = c.i - height + 1
+	}
+	c.top = min(c.top, max(n-height, 0))
+
+	var b strings.Builder
+	for i := c.top; i < min(n, c.top+height); i++ {
+		if i > c.top {
+			b.WriteByte('\n')
 		}
-	}
-
-	var cmd tea.Cmd
-	a.list, cmd = a.list.Update(msg)
-	return a, cmd
-}
-
-func (a *app) updateLoadError(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return a, nil
-	}
-	switch key.String() {
-	case "r":
-		report, err := a.ws.LoadDraft()
-		if err != nil {
-			a.loadErr = err.Error()
-			return a, nil
+		sel := i == c.i
+		mark := "  "
+		if sel {
+			mark = styleSelected.Render("▸ ")
 		}
-		a.loadErr = ""
-		a.warnings = report.Warnings
-		a.refreshList()
-		a.screen = screenList
-		return a, nil
-	case "q", "esc":
-		return a, tea.Quit
+		b.WriteString(mark + line(i, sel))
 	}
-	return a, nil
-}
-
-func (a *app) viewLoadError() string {
-	return styleDocFrame.Render(
-		styleTitle.Render("draft problem") + "\n\n" +
-			"The draft file could not be loaded:\n\n  " +
-			a.ws.DraftPath() + "\n\n" +
-			styleError.Render(a.loadErr) + "\n\n" +
-			"Fix the file in your editor, then:\n\n" +
-			"  r  reload\n" +
-			"  q  quit\n")
+	if more {
+		b.WriteString("\n" + styleDim.Render(fmt.Sprintf("  %d–%d of %d", c.top+1, min(n, c.top+height), n)))
+	}
+	return b.String()
 }

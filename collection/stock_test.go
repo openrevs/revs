@@ -1,6 +1,7 @@
-package ui
+package collection
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,9 +15,9 @@ func TestStockMovies(t *testing.T) {
 	seen := map[string]bool{}
 	for _, m := range stockMovies {
 		require.NotEmpty(t, m.Title, m.ID)
-		require.Equal(t, m.ID, deref(normalizeWikidata(m.ID)), m.Title)
-		require.Equal(t, *m.IMDB, deref(normalizeIMDB(*m.IMDB)), m.Title)
-		require.Equal(t, *m.TMDB, deref(normalizeTMDB(*m.TMDB)), m.Title)
+		require.Equal(t, m.ID, Deref(normalizeWikidata(m.ID)), m.Title)
+		require.Equal(t, *m.IMDB, Deref(normalizeIMDB(*m.IMDB)), m.Title)
+		require.Equal(t, *m.TMDB, Deref(normalizeTMDB(*m.TMDB)), m.Title)
 		require.False(t, seen[m.ID], "duplicate %s", m.ID)
 		seen[m.ID] = true
 	}
@@ -40,24 +41,35 @@ func TestSearchStock(t *testing.T) {
 	require.Empty(t, titles(" "))
 }
 
-// Offline, a search still shows stock matches, and a search with none
-// gets a plain message rather than a raw network error.
+func openTest(t *testing.T, opts ...func(*Options)) *Collection {
+	t.Helper()
+	o := Options{DataDir: t.TempDir()}
+	for _, f := range opts {
+		f(&o)
+	}
+	c, err := Open(o)
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+// Offline, a search still returns stock matches, and a search with
+// none gets a plain message rather than a raw network error.
 func TestSearchOffline(t *testing.T) {
 	// A server that is closed at once: its port refuses connections.
 	wd := httptest.NewServer(http.NotFoundHandler())
 	wd.Close()
-	u := newTestUI(t, func(o *Options) { o.WikidataURL = wd.URL })
+	c := openTest(t, func(o *Options) { o.WikidataURL = wd.URL })
 
-	page := u.get("/movies/new?q=the+matrix")
-	require.Contains(t, page, "tt0133093")
-	require.Contains(t, page, "Showing built-in matches only")
-	require.Contains(t, page, "you may be offline")
-	require.NotContains(t, page, "flash-error")
+	results, msg := c.Search(context.Background(), "the matrix")
+	require.NotEmpty(t, results)
+	require.Equal(t, "tt0133093", *results[0].IMDB)
+	require.Contains(t, msg, "you may be offline")
 
-	page = u.get("/movies/new?q=no+such+film")
-	require.Contains(t, page, "you may be offline")
-	require.Contains(t, page, "enter the details yourself")
-	require.NotContains(t, page, "connection refused")
+	results, msg = c.Search(context.Background(), "no such film")
+	require.Empty(t, results)
+	require.Contains(t, msg, "you may be offline")
+	require.NotContains(t, msg, "connection refused")
 }
 
 // A hanging Wikidata doesn't hold up stock matches for long.
@@ -76,10 +88,10 @@ func TestSearchWikidataHangs(t *testing.T) {
 	stockSearchTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { stockSearchTimeout = old })
 
-	u := newTestUI(t, func(o *Options) { o.WikidataURL = wd.URL })
+	c := openTest(t, func(o *Options) { o.WikidataURL = wd.URL })
 	start := time.Now()
-	page := u.get("/movies/new?q=the+matrix")
+	results, msg := c.Search(context.Background(), "the matrix")
 	require.Less(t, time.Since(start), 5*time.Second)
-	require.Contains(t, page, "tt0133093")
-	require.Contains(t, page, "you may be offline")
+	require.Equal(t, "tt0133093", *results[0].IMDB)
+	require.Contains(t, msg, "you may be offline")
 }

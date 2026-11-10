@@ -1,14 +1,6 @@
 // Package ui is the personal web UI behind `revs ui`: a local,
-// single-user site for managing a movie collection (movies, viewings,
-// ratings, reviews) and publishing it to openrevs servers.
-//
-// All local data — movies, viewings, settings including the signing
-// key, and the server list — lives in one SQLite database in the data
-// directory. Each server additionally gets its own SQLite database
-// holding the corpus pulled from it:
-//
-//	revs.db            the collection, settings, and servers
-//	servers/<id>.db    per-server pulled corpus, sync state, review index
+// single-user site over a collection.Collection (see that package for
+// where data lives).
 //
 // Pages are server-rendered HTML forms; the only JavaScript is a few
 // inline confirm() prompts.
@@ -16,24 +8,16 @@ package ui
 
 import (
 	"context"
-	"crypto/ed25519"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
-	"sync"
 	"time"
 
-	"github.com/openrevs/revs/client"
-	"github.com/openrevs/revs/keys"
-	"github.com/openrevs/revs/ui/localdb"
+	"github.com/openrevs/revs/collection"
 )
 
 // DefaultListen is the default address for `revs ui`.
@@ -48,66 +32,25 @@ type Options struct {
 }
 
 type App struct {
-	dataDir  string
-	db       *sql.DB
-	q        *localdb.Queries
-	versions *client.History
-	http     *http.Client
-	wikidata *wikidata
-	pages    pages
-
-	remotesMu sync.Mutex
-	remotes   map[int64]*remote
+	c     *collection.Collection
+	pages pages
 }
 
-// New opens (creating if needed) the data directory and local database.
+// New opens the collection in the data directory.
 func New(opts Options) (*App, error) {
-	if opts.DataDir == "" {
-		return nil, errors.New("ui: data directory is required")
-	}
-	if err := os.MkdirAll(opts.DataDir, 0o700); err != nil {
-		return nil, err
-	}
-
-	path := filepath.Join(opts.DataDir, "revs.db")
-	db, err := openDB(path, localMigrations, "migrations")
+	c, err := collection.Open(collection.Options{DataDir: opts.DataDir, WikidataURL: opts.WikidataURL})
 	if err != nil {
 		return nil, err
 	}
-	// The database holds the private key.
-	if err := os.Chmod(path, 0o600); err != nil {
-		db.Close()
-		return nil, err
-	}
-
 	pages, err := parsePages()
 	if err != nil {
-		db.Close()
+		c.Close()
 		return nil, err
 	}
-
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-	wdURL := opts.WikidataURL
-	if wdURL == "" {
-		wdURL = DefaultWikidataURL
-	}
-
-	return &App{
-		dataDir:  opts.DataDir,
-		db:       db,
-		q:        localdb.New(db),
-		versions: client.NewHistory(historyStore{db}),
-		http:     httpClient,
-		wikidata: &wikidata{baseURL: wdURL, http: &http.Client{Timeout: 15 * time.Second}},
-		pages:    pages,
-		remotes:  map[int64]*remote{},
-	}, nil
+	return &App{c: c, pages: pages}, nil
 }
 
-func (a *App) Close() error {
-	a.closeRemotes()
-	return a.db.Close()
-}
+func (a *App) Close() error { return a.c.Close() }
 
 // Run serves the UI until ctx is canceled.
 func Run(ctx context.Context, opts Options) error {
@@ -178,45 +121,4 @@ func openBrowser(url string) error {
 	}
 	go cmd.Wait()
 	return nil
-}
-
-// Settings keys.
-const (
-	settingPrivateKey = "private_key" // base64 ed25519 seed
-	settingDocRev     = "doc_rev"     // revision of the last export, before the version history
-)
-
-func (a *App) setting(ctx context.Context, key string) string {
-	v, err := a.q.GetSetting(ctx, key)
-	if err != nil {
-		return ""
-	}
-	return v
-}
-
-func (a *App) settingInt(ctx context.Context, key string) int {
-	n, _ := strconv.Atoi(a.setting(ctx, key))
-	return n
-}
-
-func (a *App) setSetting(ctx context.Context, key, value string) error {
-	return a.q.SetSetting(ctx, localdb.SetSettingParams{Key: key, Value: value})
-}
-
-// privateKey returns the signing key, or nil if none is configured.
-func (a *App) privateKey(ctx context.Context) (ed25519.PrivateKey, error) {
-	v := a.setting(ctx, settingPrivateKey)
-	if v == "" {
-		return nil, nil
-	}
-	return keys.ParsePrivate(v)
-}
-
-// userID returns the id derived from the signing key, or "".
-func (a *App) userID(ctx context.Context) string {
-	key, err := a.privateKey(ctx)
-	if err != nil || key == nil {
-		return ""
-	}
-	return keys.UserID(key.Public().(ed25519.PublicKey))
 }

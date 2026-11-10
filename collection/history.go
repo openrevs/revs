@@ -1,4 +1,4 @@
-package ui
+package collection
 
 import (
 	"database/sql"

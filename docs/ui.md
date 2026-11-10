@@ -1,9 +1,14 @@
-# revs ui
+# revs ui and revs tui
 
 `revs ui` runs a local, single-user website for managing your movie
 collection and publishing it to openrevs servers. It opens your browser
 at http://localhost:1325/ (use `--no-browser` to skip that, and
 `--listen` to change the address).
+
+`revs tui` is the same thing in the terminal: the same data and
+features, organized under five tabs (1 Movies, 2 History, 3 Servers,
+4 Identity, 5 Data). Each screen lists its keys at the bottom; esc
+goes back. Both can run at once on the same data directory.
 
 ## What it does
 
@@ -19,9 +24,9 @@ at http://localhost:1325/ (use `--no-browser` to skip that, and
   pull everyone's published reviews from them. Pulled reviews show
   under "Others' reviews" on matching movies, and per user on the
   server page.
-- **Import/Export**: download your collection as a signed sjsonl
-  ratingset, or merge in a ratingset file (signed, or an unsigned
-  `revs tui` `draft.jsonl`).
+- **Import/Export**: save your collection as a signed sjsonl
+  ratingset, or merge in a ratingset file (signed, or unsigned JSON
+  lines).
 
 ## Data
 
@@ -58,7 +63,10 @@ refused. There is no login, so don't expose it on a shared network.
 
 ## Development
 
-Queries live in `ui/queries` and `ui/remotequeries`. Schemas are goose
-migrations in `ui/migrations` and `ui/remotemigrations`, embedded and
-applied at startup. Regenerate the Go code with `make generate`
+Both front ends are thin layers over the `collection` package, which
+owns the databases, validation, search, import/export, and
+publishing. Queries live in `collection/queries` and
+`collection/remotequeries`. Schemas are goose migrations in
+`collection/migrations` and `collection/remotemigrations`, embedded
+and applied at startup. Regenerate the Go code with `make generate`
 (sqlc v1.30.0).

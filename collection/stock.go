@@ -1,4 +1,4 @@
-package ui
+package collection
 
 import (
 	_ "embed"
@@ -17,7 +17,7 @@ import (
 var stockMoviesJSON []byte
 
 type stockMovie struct {
-	WikidataResult
+	SearchResult
 	words []string // normalized title words and year, for matching
 }
 
@@ -38,7 +38,7 @@ func loadStockMovies() []stockMovie {
 	out := make([]stockMovie, len(raw))
 	for i, r := range raw {
 		out[i] = stockMovie{
-			WikidataResult: WikidataResult{
+			SearchResult: SearchResult{
 				ID:          r.ID,
 				Title:       r.Title,
 				Description: r.Description,
@@ -54,15 +54,15 @@ func loadStockMovies() []stockMovie {
 
 // searchStock returns the stock movies whose title (or year) contains
 // every word of query.
-func searchStock(query string) []WikidataResult {
+func searchStock(query string) []SearchResult {
 	q := searchWords(query)
 	if len(q) == 0 {
 		return nil
 	}
-	var out []WikidataResult
+	var out []SearchResult
 	for _, m := range stockMovies {
 		if containsAll(m.words, q) {
-			out = append(out, m.WikidataResult)
+			out = append(out, m.SearchResult)
 		}
 	}
 	return out

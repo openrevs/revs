@@ -21,7 +21,6 @@ import (
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/tui"
-	"github.com/openrevs/revs/tui/workspace"
 	"github.com/openrevs/revs/ui"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
@@ -38,7 +37,7 @@ import (
 type cli struct {
 	Config kong.ConfigFlag `help:"Load configuration from a file (overrides the default config paths)." placeholder:"FILE"`
 
-	TUI    tuiCmd    `cmd:"" group:"common" help:"Edit your ratings interactively"`
+	TUI    tuiCmd    `cmd:"" group:"common" help:"Manage your movies and reviews in the terminal"`
 	UI     uiCmd     `cmd:"" name:"ui" group:"common" help:"Manage your movies and reviews in a local web UI"`
 	Keygen keygenCmd `cmd:"" group:"common" help:"Generate a new identity keypair"`
 
@@ -57,13 +56,12 @@ type cli struct {
 
 type tuiCmd struct {
 	DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
-	Server  string `help:"Server URL (persisted to the data dir config on first use)"`
 }
 
 func (tuiCmd) Help() string {
-	return "Opens a full-screen terminal editor for your ratings. Your ratings and " +
-		"identity are kept in the data directory; with --server, changes are synced " +
-		"to that publishing server."
+	return "Opens a full-screen terminal UI for your movies, viewings and reviews, " +
+		"your identity, and the servers you publish to. It shows the same data as " +
+		"\"revs ui\", and both can run at once."
 }
 
 type uiCmd struct {
@@ -74,7 +72,7 @@ type uiCmd struct {
 
 func (uiCmd) Help() string {
 	return "Starts a web UI on a local address and opens it in your browser. " +
-		"It uses the same data directory as the TUI. Stop it with Ctrl-C."
+		"It shows the same data as \"revs tui\". Stop it with Ctrl-C."
 }
 
 type keygenCmd struct{}
@@ -259,7 +257,7 @@ func main() {
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
-		if err := tui.Run(workspace.Options{DataDir: CLI.TUI.DataDir, ServerFlag: CLI.TUI.Server}); err != nil {
+		if err := tui.Run(tui.Options{DataDir: CLI.TUI.DataDir}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

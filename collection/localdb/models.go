@@ -4,6 +4,19 @@
 
 package localdb
 
+type History struct {
+	Userid     string
+	ForeignRev int64
+}
+
+type HistoryVersion struct {
+	Userid string
+	Seq    int64
+	Rev    int64
+	Hash   string
+	Data   []byte
+}
+
 type Movie struct {
 	ID         int64
 	Title      string

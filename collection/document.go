@@ -1,4 +1,4 @@
-package ui
+package collection
 
 import (
 	"bytes"
@@ -10,18 +10,16 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/collection/localdb"
 	"github.com/openrevs/revs/keys"
-	"github.com/openrevs/revs/ui/localdb"
 	"github.com/tidwall/gjson"
 )
 
 const (
-	minRating = 0
-	maxRating = 5
-
 	titleTypeMovie = "movie"
 
 	// Keys of a title line's "refs" object.
@@ -36,12 +34,12 @@ const (
 // Lines are deterministic for unchanged data, and byte-identical
 // duplicates (which sjsonl cannot sign) are dropped — they carry no
 // information.
-func buildContent(ctx context.Context, q *localdb.Queries, userID string) ([]byte, error) {
-	movies, err := q.AllMovies(ctx)
+func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, error) {
+	movies, err := c.q.AllMovies(ctx)
 	if err != nil {
 		return nil, err
 	}
-	viewings, err := q.AllViewings(ctx)
+	viewings, err := c.q.AllViewings(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +49,7 @@ func buildContent(ctx context.Context, q *localdb.Queries, userID string) ([]byt
 		byMovie[v.MovieID] = append(byMovie[v.MovieID], v)
 	}
 
-	user, err := json.Marshal(revs.User2{ID: userID, MinRating: minRating, MaxRating: maxRating})
+	user, err := json.Marshal(revs.User2{ID: userID, MinRating: MinRating, MaxRating: MaxRating})
 	if err != nil {
 		return nil, err
 	}
@@ -112,21 +110,34 @@ func titleFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Title2 {
 	return t
 }
 
-// signExport signs the collection for export as the author's newest
-// version, the same one a push would upload: its revision is bumped only
-// when content has changed, and never below a revision already pushed to
-// a server (so an exported file supersedes what servers hold).
-func (a *App) signExport(ctx context.Context, key ed25519.PrivateKey) ([]byte, int, error) {
-	uid := keys.UserID(key.Public().(ed25519.PublicKey))
-	content, err := buildContent(ctx, a.q, uid)
+// Export signs the collection as the author's newest version, the same
+// one a push would upload: its revision is bumped only when content has
+// changed, and never below a revision already pushed to a server (so an
+// exported file supersedes what servers hold).
+func (c *Collection) Export(ctx context.Context) (data []byte, rev int, err error) {
+	key, err := c.signingKey(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
+	uid := keys.UserID(key.Public().(ed25519.PublicKey))
+	content, err := c.buildContent(ctx, uid)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = c.syncLocked(ctx, func() error {
+		data, rev, err = c.commitExport(ctx, key, uid, content)
+		return err
+	})
+	return data, rev, err
+}
 
+// commitExport commits content to the version history. Callers hold
+// the sync lock.
+func (c *Collection) commitExport(ctx context.Context, key ed25519.PrivateKey, uid string, content []byte) ([]byte, int, error) {
 	// Before the first version, account for revisions assigned before
 	// the version history existed: the last export, and pushes.
-	known := a.settingInt(ctx, settingDocRev)
-	servers, err := a.q.ListServers(ctx)
+	known := c.settingInt(ctx, settingDocRev)
+	servers, err := c.q.ListServers(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -135,17 +146,17 @@ func (a *App) signExport(ctx context.Context, key ed25519.PrivateKey) ([]byte, i
 			known = max(known, int(*s.LastPushRev))
 		}
 	}
-	_, err = a.versions.Latest(uid)
+	_, err = c.versions.Latest(uid)
 	switch {
 	case errors.Is(err, client.ErrNotFound):
-		if err := a.versions.NoteRev(uid, known, ""); err != nil {
+		if err := c.versions.NoteRev(uid, known, ""); err != nil {
 			return nil, 0, err
 		}
 	case err != nil:
 		return nil, 0, err
 	}
 
-	doc, err := a.versions.Commit(key, content)
+	doc, err := c.versions.Commit(key, content)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -161,8 +172,7 @@ type parsedDoc struct {
 
 // parseRatingset reads a ratingset for import. A signed sjsonl document
 // is fully verified (signature, and user id matching the signing key);
-// an unsigned file of data lines — such as a `revs tui` draft.jsonl — is
-// accepted as is.
+// an unsigned file of data lines is accepted as is.
 func parseRatingset(data []byte) (*parsedDoc, error) {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
@@ -216,6 +226,52 @@ type ImportStats struct {
 	SkippedNonFilm int
 }
 
+// ErrUnreadableFile is returned by Import for a file that isn't a valid
+// ratingset. errors.Unwrap on the returned error gives the reason.
+var ErrUnreadableFile = errors.New("could not read that file")
+
+type unreadableFile struct{ err error }
+
+func (e unreadableFile) Error() string        { return ErrUnreadableFile.Error() + ": " + e.err.Error() }
+func (e unreadableFile) Unwrap() error        { return e.err }
+func (e unreadableFile) Is(target error) bool { return target == ErrUnreadableFile }
+
+// ExportFilename is a file name for an export of revision rev.
+func ExportFilename(rev int) string {
+	return fmt.Sprintf("revs-%s-r%d.sjsonl", time.Now().Format("20060102"), rev)
+}
+
+// ImportResult reports what Import did.
+type ImportResult struct {
+	ImportStats
+	// ForeignUser is set when the file was another user's collection
+	// than the signing key's.
+	ForeignUser bool
+}
+
+func (r ImportResult) String() string {
+	msg := r.ImportStats.String()
+	if r.ForeignUser {
+		msg += " Note: the file belongs to a different user id than your key; its reviews are now yours."
+	}
+	return msg
+}
+
+// Import merges a ratingset file into the collection: a signed sjsonl
+// document, which must verify, or unsigned data lines. See mergeTitles.
+func (c *Collection) Import(ctx context.Context, data []byte) (ImportResult, error) {
+	pd, err := parseRatingset(data)
+	if err != nil {
+		return ImportResult{}, unreadableFile{err}
+	}
+	stats, err := c.mergeTitles(ctx, pd.Titles)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	uid := c.UserID(ctx)
+	return ImportResult{ImportStats: stats, ForeignUser: pd.UserID != "" && uid != "" && pd.UserID != uid}, nil
+}
+
 func (s ImportStats) String() string {
 	msg := fmt.Sprintf("Imported %d new movies (%d already present) and %d new viewings (%d already present).",
 		s.MoviesAdded, s.MoviesMatched, s.ViewingsAdded, s.ViewingsKept)
@@ -230,15 +286,15 @@ func (s ImportStats) String() string {
 // by Wikidata, IMDb, or TMDB id, else by title and year; missing ids
 // are filled in on a match. A review is added unless the movie already
 // has a viewing with the same date, rating, and text.
-func (a *App) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStats, error) {
+func (c *Collection) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStats, error) {
 	var stats ImportStats
 
-	tx, err := a.db.BeginTx(ctx, nil)
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return stats, err
 	}
 	defer tx.Rollback()
-	q := a.q.WithTx(tx)
+	q := c.q.WithTx(tx)
 
 	for _, t := range titles {
 		if t.Type != nil && *t.Type != "" && !strings.EqualFold(*t.Type, titleTypeMovie) {
@@ -250,7 +306,7 @@ func (a *App) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStat
 			continue
 		}
 
-		in := movieInput{Title: name}
+		in := MovieInput{Title: name}
 		if t.Year != nil {
 			y := int64(*t.Year)
 			in.Year = &y
@@ -272,7 +328,7 @@ func (a *App) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStat
 		}
 		if found {
 			stats.MoviesMatched++
-			upd := movieInput{
+			upd := MovieInput{
 				Title:    m.Title,
 				Year:     cmpOr(m.Year, in.Year),
 				IMDB:     cmpOr(m.ImdbID, in.IMDB),
@@ -298,7 +354,7 @@ func (a *App) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStat
 			if r.Date != nil && *r.Date != "" {
 				v.ViewedOn = r.Date
 			}
-			if r.Rating != nil && *r.Rating >= minRating && *r.Rating <= maxRating {
+			if r.Rating != nil && *r.Rating >= MinRating && *r.Rating <= MaxRating {
 				n := int64(*r.Rating)
 				v.Rating = &n
 			}
@@ -327,7 +383,7 @@ func sameViewing(e localdb.Viewing, v localdb.CreateViewingParams) bool {
 
 // findMovie looks up an existing movie for in by external ids, then by
 // title and year.
-func findMovie(ctx context.Context, q *localdb.Queries, in movieInput) (localdb.Movie, bool, error) {
+func findMovie(ctx context.Context, q *localdb.Queries, in MovieInput) (localdb.Movie, bool, error) {
 	lookups := []func() (localdb.Movie, error){}
 	if in.Wikidata != nil {
 		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByWikidata(ctx, in.Wikidata) })

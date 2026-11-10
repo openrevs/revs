@@ -10,13 +10,13 @@ highest:
 5. Flags on the command line
 
 Command-line flags always win, so any instance can be fully redirected
-ad hoc — useful for running several servers or TUIs at once when testing
-sync:
+ad hoc — useful for running several servers or collections at once when
+testing sync:
 
 ```sh
 revs server --data /tmp/s1 --listen :9001 &
 revs server --data /tmp/s2 --listen :9002 &
-revs tui --data /tmp/t1 --server http://localhost:9001
+revs tui --data /tmp/t1     # then add the servers under "3 Servers"
 ```
 
 ## File format
@@ -47,8 +47,7 @@ clientserver:
   cut-interval: 30m
 
 tui:
-  data: ~/.revs              # data directory / state location
-  server: https://ratings.example.com
+  data: ~/.revs              # the same collection as `ui`
 
 ui:
   data: ~/.revs              # holds revs.db and servers/
@@ -60,17 +59,10 @@ Sections are independent: a key under `server:` never affects `tui`.
 
 ## Data directories
 
-`tui` and `ui` keep their state in `~/.revs`. The server commands
+`tui` and `ui` are two front ends to the same collection, kept in
+`~/.revs` (see [ui.md](ui.md)); they can run at the same time. The server commands
 (`server`, `client`, `clientserver`) default to `~/.revs/server`: the
 server's `revs.db` would otherwise collide with the UI's, and the
 directory also holds the server's identity (`server.key`), its document
 store (`docs/`), and the published tree (`public/`). Any data directory
 is created on first run; back up the server one to keep its identity.
-
-## Note on the TUI
-
-The `tui.data` key sets where the TUI keeps its state. The workspace
-also maintains its own `config.json` *inside* that data directory
-(currently just the server URL); that file is app-managed state, not
-user configuration — `--server` (or `tui.server`) persists into it on
-first use.

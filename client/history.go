@@ -251,6 +251,16 @@ func (h *History) append(uid string, vh *VersionHistory, v StoredVersion) error 
 	return h.save(uid, next)
 }
 
+// Reload discards cached histories, so the next call reads them from
+// the store. Call it before using a store that another process (with
+// its own History) may have written, while holding a lock that keeps
+// that process out.
+func (h *History) Reload() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	clear(h.cache)
+}
+
 // load returns the user's cached history, loading it on first use.
 // Callers hold h.mu and must not mutate the result.
 func (h *History) load(uid string) (*VersionHistory, error) {

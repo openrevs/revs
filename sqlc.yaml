@@ -37,12 +37,12 @@ sql:
             go_type:
               type: "int"
   - engine: "sqlite"
-    schema: "./ui/migrations"
-    queries: "./ui/queries"
+    schema: "./collection/migrations"
+    queries: "./collection/queries"
     gen:
       go:
         package: "localdb"
-        out: "ui/localdb"
+        out: "collection/localdb"
         emit_pointers_for_null_types: true
         overrides: &uioverrides
           - db_type: "INTEGER"
@@ -54,11 +54,11 @@ sql:
               type: "int64"
               pointer: true
   - engine: "sqlite"
-    schema: "./ui/remotemigrations"
-    queries: "./ui/remotequeries"
+    schema: "./collection/remotemigrations"
+    queries: "./collection/remotequeries"
     gen:
       go:
         package: "remotedb"
-        out: "ui/remotedb"
+        out: "collection/remotedb"
         emit_pointers_for_null_types: true
         overrides: *uioverrides

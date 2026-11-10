@@ -1,4 +1,4 @@
-package ui
+package collection
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/sqlitestore"
-	"github.com/openrevs/revs/ui/remotedb"
+	"github.com/openrevs/revs/collection/remotedb"
 	"github.com/tidwall/gjson"
 )
 
@@ -29,20 +29,20 @@ type remote struct {
 	client *client.Client
 }
 
-func (a *App) remotePath(serverID int64) string {
-	return filepath.Join(a.dataDir, "servers", strconv.FormatInt(serverID, 10)+".db")
+func (c *Collection) remotePath(serverID int64) string {
+	return filepath.Join(c.dataDir, "servers", strconv.FormatInt(serverID, 10)+".db")
 }
 
 // remote returns the open remote for a server, opening it on first use.
-func (a *App) remote(serverID int64, serverURL string) (*remote, error) {
-	a.remotesMu.Lock()
-	defer a.remotesMu.Unlock()
+func (c *Collection) remote(serverID int64, serverURL string) (*remote, error) {
+	c.remotesMu.Lock()
+	defer c.remotesMu.Unlock()
 
-	if r, ok := a.remotes[serverID]; ok {
+	if r, ok := c.remotes[serverID]; ok {
 		return r, nil
 	}
 
-	path := a.remotePath(serverID)
+	path := c.remotePath(serverID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -62,27 +62,27 @@ func (a *App) remote(serverID int64, serverURL string) (*remote, error) {
 		store:  store,
 		db:     db,
 		q:      remotedb.New(db),
-		client: client.New(serverURL, store, client.WithHTTPClient(a.http), client.WithHistory(a.versions)),
+		client: client.New(serverURL, store, client.WithHTTPClient(c.http), client.WithHistory(c.versions)),
 	}
-	a.remotes[serverID] = r
+	c.remotes[serverID] = r
 	return r, nil
 }
 
 // closeRemote closes a server's database and, if remove is set, deletes
 // its file (and WAL side files). The pulled corpus is a cache, so this
 // is how a server is reset or forgotten.
-func (a *App) closeRemote(serverID int64, remove bool) error {
-	a.remotesMu.Lock()
-	defer a.remotesMu.Unlock()
+func (c *Collection) closeRemote(serverID int64, remove bool) error {
+	c.remotesMu.Lock()
+	defer c.remotesMu.Unlock()
 
-	if r, ok := a.remotes[serverID]; ok {
+	if r, ok := c.remotes[serverID]; ok {
 		r.db.Close()
 		r.store.Close()
-		delete(a.remotes, serverID)
+		delete(c.remotes, serverID)
 	}
 
 	if remove {
-		path := a.remotePath(serverID)
+		path := c.remotePath(serverID)
 		for _, p := range []string{path, path + "-wal", path + "-shm"} {
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return err
@@ -92,16 +92,16 @@ func (a *App) closeRemote(serverID int64, remove bool) error {
 	return nil
 }
 
-func (a *App) closeRemotes() {
-	a.remotesMu.Lock()
-	ids := make([]int64, 0, len(a.remotes))
-	for id := range a.remotes {
+func (c *Collection) closeRemotes() {
+	c.remotesMu.Lock()
+	ids := make([]int64, 0, len(c.remotes))
+	for id := range c.remotes {
 		ids = append(ids, id)
 	}
-	a.remotesMu.Unlock()
+	c.remotesMu.Unlock()
 
 	for _, id := range ids {
-		a.closeRemote(id, false)
+		c.closeRemote(id, false)
 	}
 }
 
@@ -215,8 +215,8 @@ func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Documen
 }
 
 // pull syncs a server's corpus and refreshes the review index.
-func (a *App) pull(ctx context.Context, serverID int64, serverURL string, rebootstrap bool) (*client.Result, error) {
-	r, err := a.remote(serverID, serverURL)
+func (c *Collection) pull(ctx context.Context, serverID int64, serverURL string, rebootstrap bool) (*client.Result, error) {
+	r, err := c.remote(serverID, serverURL)
 	if err != nil {
 		return nil, err
 	}

@@ -85,20 +85,20 @@ func TestCLIOverridesConfigFile(t *testing.T) {
 }
 
 func TestConfigSectionsAreIndependent(t *testing.T) {
-	tuiDir := t.TempDir()
+	uiDir := t.TempDir()
 	cfg := fmt.Sprintf(`
 server:
   listen: ":9999"
-tui:
+ui:
   data: %s
-  server: http://localhost:9999
-`, tuiDir)
-	c := parseWith(t, cfg, "tui")
-	if c.TUI.DataDir != tuiDir {
-		t.Errorf("tui data dir = %q, want %q", c.TUI.DataDir, tuiDir)
+  listen: 127.0.0.1:9998
+`, uiDir)
+	c := parseWith(t, cfg, "ui")
+	if c.UI.DataDir != uiDir {
+		t.Errorf("ui data dir = %q, want %q", c.UI.DataDir, uiDir)
 	}
-	if c.TUI.Server != "http://localhost:9999" {
-		t.Errorf("tui server = %q, want config value", c.TUI.Server)
+	if c.UI.Listen != "127.0.0.1:9998" {
+		t.Errorf("ui listen = %q, want config value", c.UI.Listen)
 	}
 	// The server section must not leak into the client command.
 	c = parseWith(t, cfg, "client")

@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/openrevs/revs/collection"
 )
 
 //go:embed templates/*.html
@@ -45,13 +47,13 @@ func parsePages() (pages, error) {
 }
 
 var funcs = template.FuncMap{
-	"stars":    stars,
+	"stars":    collection.Stars,
 	"deref":    derefAny,
-	"short":    shortID,
-	"imdbURL":  func(id string) string { return "https://www.imdb.com/title/" + url.PathEscape(id) + "/" },
-	"tmdbURL":  func(id string) string { return "https://www.themoviedb.org/movie/" + url.PathEscape(id) },
-	"wdURL":    func(id string) string { return "https://www.wikidata.org/wiki/" + url.PathEscape(id) },
-	"today":    func() string { return time.Now().Format(dateLayout) },
+	"short":    collection.ShortID,
+	"imdbURL":  func(id string) string { return collection.IMDBURL(url.PathEscape(id)) },
+	"tmdbURL":  func(id string) string { return collection.TMDBURL(url.PathEscape(id)) },
+	"wdURL":    func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
+	"today":    func() string { return time.Now().Format(collection.DateLayout) },
 	"ratingIs": func(r *int64, n int) bool { return r != nil && *r == int64(n) },
 	"seq": func(from, to int) []int {
 		s := []int{}
@@ -60,7 +62,7 @@ var funcs = template.FuncMap{
 		}
 		return s
 	},
-	"timeAgo": timeAgo,
+	"timeAgo": collection.TimeAgo,
 	"int64":   func(n int) int64 { return int64(n) },
 	"dict":    dict,
 }
@@ -82,38 +84,11 @@ func dict(kv ...any) (map[string]any, error) {
 	return m, nil
 }
 
-// stars renders a 0–5 rating, or a dash when unrated. A negative rating
-// means unrated (ListMovies uses -1).
-func stars(r any) string {
-	var n int64 = -1
-	switch v := r.(type) {
-	case *int64:
-		if v != nil {
-			n = *v
-		}
-	case int64:
-		n = v
-	}
-	if n < 0 {
-		return "–"
-	}
-	n = min(n, maxRating)
-	return strings.Repeat("★", int(n)) + strings.Repeat("☆", maxRating-int(n))
-}
-
-func deref[T any](p *T) T {
-	var zero T
-	if p == nil {
-		return zero
-	}
-	return *p
-}
-
 // derefAny is deref for templates, which can't instantiate generics.
 func derefAny(v any) any {
 	switch p := v.(type) {
 	case *string:
-		return deref(p)
+		return collection.Deref(p)
 	case *int64:
 		if p == nil {
 			return ""
@@ -121,34 +96,6 @@ func derefAny(v any) any {
 		return *p
 	}
 	return v
-}
-
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12] + "…"
-	}
-	return id
-}
-
-func timeAgo(ts *string) string {
-	if ts == nil {
-		return "never"
-	}
-	t, err := time.Parse("2006-01-02T15:04:05Z", *ts)
-	if err != nil {
-		return *ts
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%d min ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%d h ago", int(d.Hours()))
-	default:
-		return t.Local().Format("2006-01-02 15:04")
-	}
 }
 
 // view is what every page template receives.
@@ -208,7 +155,7 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, status int, page st
 	if v.Flash == nil {
 		v.Flash = popFlash(w, r)
 	}
-	v.UserID = a.userID(r.Context())
+	v.UserID = a.c.UserID(r.Context())
 
 	var buf bytes.Buffer
 	if err := t.ExecuteTemplate(&buf, "layout.html", v); err != nil {

@@ -146,6 +146,15 @@ func (c *Client) Epoch() (int, error) {
 	return c.state.Epoch, nil
 }
 
+// Reload discards cached sync state, so the next call reads it from the
+// store. Call it before using a store that another process may have
+// written, while holding a lock that keeps that process out.
+func (c *Client) Reload() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = nil
+}
+
 // ensureState lazily loads persisted state. Callers hold c.mu.
 func (c *Client) ensureState() error {
 	if c.state != nil {

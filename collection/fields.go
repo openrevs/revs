@@ -1,18 +1,18 @@
-package ui
+package collection
 
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/openrevs/revs/ui/localdb"
+	"github.com/openrevs/revs/collection/localdb"
 )
 
-const dateLayout = "2006-01-02"
+// DateLayout is the format of viewing dates.
+const DateLayout = "2006-01-02"
 
 var (
 	imdbRe     = regexp.MustCompile(`tt\d{5,}`)
@@ -56,8 +56,8 @@ func normalizeWikidata(s string) *string {
 	return &m
 }
 
-// movieInput is a validated movie form (or imported title).
-type movieInput struct {
+// MovieInput is a validated movie.
+type MovieInput struct {
 	Title    string
 	Year     *int64
 	IMDB     *string
@@ -65,36 +65,44 @@ type movieInput struct {
 	Wikidata *string
 }
 
-func (in movieInput) createParams() localdb.CreateMovieParams {
+func (in MovieInput) createParams() localdb.CreateMovieParams {
 	return localdb.CreateMovieParams{Title: in.Title, Year: in.Year, ImdbID: in.IMDB, TmdbID: in.TMDB, WikidataID: in.Wikidata}
 }
 
-func (in movieInput) updateParams(id int64) localdb.UpdateMovieParams {
+func (in MovieInput) updateParams(id int64) localdb.UpdateMovieParams {
 	return localdb.UpdateMovieParams{Title: in.Title, Year: in.Year, ImdbID: in.IMDB, TmdbID: in.TMDB, WikidataID: in.Wikidata, ID: id}
 }
 
-// movieForm is the movie form's raw values, redisplayed on error.
-type movieForm struct {
+// MovieFields is a movie as the user typed it: free text that Parse
+// validates. Ids may be given as ids or as URLs.
+type MovieFields struct {
 	Title, Year, IMDB, TMDB, Wikidata string
 }
 
-func movieFormFrom(m localdb.Movie) movieForm {
-	f := movieForm{Title: m.Title, IMDB: deref(m.ImdbID), TMDB: deref(m.TmdbID), Wikidata: deref(m.WikidataID)}
+// MovieFieldsFrom returns the fields for editing an existing movie.
+func MovieFieldsFrom(m localdb.Movie) MovieFields {
+	f := MovieFields{Title: m.Title, IMDB: Deref(m.ImdbID), TMDB: Deref(m.TmdbID), Wikidata: Deref(m.WikidataID)}
 	if m.Year != nil {
 		f.Year = strconv.FormatInt(*m.Year, 10)
 	}
 	return f
 }
 
-func parseMovieForm(r *http.Request) (movieForm, movieInput, error) {
-	f := movieForm{
-		Title:    strings.TrimSpace(r.PostFormValue("title")),
-		Year:     strings.TrimSpace(r.PostFormValue("year")),
-		IMDB:     strings.TrimSpace(r.PostFormValue("imdb_id")),
-		TMDB:     strings.TrimSpace(r.PostFormValue("tmdb_id")),
-		Wikidata: strings.TrimSpace(r.PostFormValue("wikidata_id")),
+// MovieFieldsFromResult returns the fields for a search result.
+func MovieFieldsFromResult(r SearchResult) MovieFields {
+	f := MovieFields{Title: r.Title, IMDB: Deref(r.IMDB), TMDB: Deref(r.TMDB), Wikidata: r.ID}
+	if r.Year != nil {
+		f.Year = strconv.FormatInt(*r.Year, 10)
 	}
-	in := movieInput{Title: f.Title}
+	return f
+}
+
+// Parse trims and validates the fields, reporting every problem found.
+func (f *MovieFields) Parse() (MovieInput, error) {
+	for _, s := range []*string{&f.Title, &f.Year, &f.IMDB, &f.TMDB, &f.Wikidata} {
+		*s = strings.TrimSpace(*s)
+	}
+	in := MovieInput{Title: f.Title}
 
 	var errs []error
 	if f.Title == "" {
@@ -124,39 +132,46 @@ func parseMovieForm(r *http.Request) (movieForm, movieInput, error) {
 		}
 	}
 
-	return f, in, errors.Join(errs...)
+	return in, errors.Join(errs...)
 }
 
-// viewingForm is the viewing form's raw values.
-type viewingForm struct {
+// ViewingInput is a validated viewing.
+type ViewingInput struct {
+	Date   *string
+	Rating *int64
+	Review string
+}
+
+// ViewingFields is a viewing as the user typed it. Rating is a number
+// of stars, or "" or "none" for unrated.
+type ViewingFields struct {
 	Date, Rating, Review string
 }
 
-func viewingFormFrom(v localdb.Viewing) viewingForm {
-	f := viewingForm{Date: deref(v.ViewedOn), Review: v.Review, Rating: "none"}
+// NewViewingFields returns the fields for a new viewing: today, unrated.
+func NewViewingFields() ViewingFields {
+	return ViewingFields{Date: time.Now().Format(DateLayout), Rating: "none"}
+}
+
+// ViewingFieldsFrom returns the fields for editing an existing viewing.
+func ViewingFieldsFrom(v localdb.Viewing) ViewingFields {
+	f := ViewingFields{Date: Deref(v.ViewedOn), Review: v.Review, Rating: "none"}
 	if v.Rating != nil {
 		f.Rating = strconv.FormatInt(*v.Rating, 10)
 	}
 	return f
 }
 
-type viewingInput struct {
-	Date   *string
-	Rating *int64
-	Review string
-}
-
-func parseViewingForm(r *http.Request) (viewingForm, viewingInput, error) {
-	f := viewingForm{
-		Date:   strings.TrimSpace(r.PostFormValue("viewed_on")),
-		Rating: r.PostFormValue("rating"),
-		Review: strings.TrimSpace(strings.ReplaceAll(r.PostFormValue("review"), "\r\n", "\n")),
-	}
-	in := viewingInput{Review: f.Review}
+// Parse trims and validates the fields, reporting every problem found.
+func (f *ViewingFields) Parse() (ViewingInput, error) {
+	f.Date = strings.TrimSpace(f.Date)
+	f.Rating = strings.TrimSpace(f.Rating)
+	f.Review = strings.TrimSpace(strings.ReplaceAll(f.Review, "\r\n", "\n"))
+	in := ViewingInput{Review: f.Review}
 
 	var errs []error
 	if f.Date != "" {
-		if _, err := time.Parse(dateLayout, f.Date); err != nil {
+		if _, err := time.Parse(DateLayout, f.Date); err != nil {
 			errs = append(errs, fmt.Errorf("date %q should be YYYY-MM-DD", f.Date))
 		} else {
 			in.Date = &f.Date
@@ -167,12 +182,12 @@ func parseViewingForm(r *http.Request) (viewingForm, viewingInput, error) {
 		f.Rating = "none"
 	default:
 		n, err := strconv.ParseInt(f.Rating, 10, 64)
-		if err != nil || n < minRating || n > maxRating {
-			errs = append(errs, fmt.Errorf("rating must be %d–%d stars", minRating, maxRating))
+		if err != nil || n < MinRating || n > MaxRating {
+			errs = append(errs, fmt.Errorf("rating must be %d–%d stars", MinRating, MaxRating))
 		} else {
 			in.Rating = &n
 		}
 	}
 
-	return f, in, errors.Join(errs...)
+	return in, errors.Join(errs...)
 }
