@@ -27,7 +27,7 @@ in place of hyphens (`cut-interval` or `cut_interval`).
 
 ```yaml
 server:
-  data: /var/revs            # --data
+  data: /var/revs            # --data; default ~/.revs/server
   listen: ":1323"            # --listen
   cut-interval: 30m          # --cut-interval
   snapshot-every: 100        # --snapshot-every
@@ -36,7 +36,7 @@ server:
   snapshot-chunk-size: 268435456  # --snapshot-chunk-size
 
 client:
-  data: /var/revs
+  data: /var/revs            # default ~/.revs/server
   listen: ":1324"
   demo: false
 
@@ -57,6 +57,15 @@ ui:
 ```
 
 Sections are independent: a key under `server:` never affects `tui`.
+
+## Data directories
+
+`tui` and `ui` keep their state in `~/.revs`. The server commands
+(`server`, `client`, `clientserver`) default to `~/.revs/server`: the
+server's `revs.db` would otherwise collide with the UI's, and the
+directory also holds the server's identity (`server.key`), its document
+store (`docs/`), and the published tree (`public/`). Any data directory
+is created on first run; back up the server one to keep its identity.
 
 ## Note on the TUI
 

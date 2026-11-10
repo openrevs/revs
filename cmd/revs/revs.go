@@ -49,7 +49,7 @@ type cli struct {
 	} `cmd:"" group:"common" help:"Generate a new identity keypair"`
 
 	Server struct {
-		DataDir           string        `name:"data" help:"Data directory" default:"." type:"path"`
+		DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
 		Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
 		CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 		SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
@@ -58,13 +58,13 @@ type cli struct {
 	} `cmd:"" group:"servers" help:"Run a ratings publishing server"`
 
 	Client struct {
-		DataDir string `name:"data" help:"Data directory" default:"." type:"path"`
+		DataDir string `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
 		Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
 		Demo    bool   `help:"Insert demo data"`
 	} `cmd:"" group:"servers" help:"Run the local web client"`
 
 	ClientServer struct {
-		DataDir           string        `name:"data" help:"Data directory" default:"." type:"path"`
+		DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
 		ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
 		ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
 		Demo              bool          `help:"Insert demo data"`
@@ -155,7 +155,7 @@ func main() {
 
 	switch ctx.Command() {
 	case "server":
-		requireDir(CLI.Server.DataDir)
+		ensureDir(CLI.Server.DataDir)
 		revs.Start2(CLI.Server.DataDir, revs.ServerOptions{
 			Listen:            CLI.Server.Listen,
 			CutInterval:       CLI.Server.CutInterval,
@@ -164,10 +164,10 @@ func main() {
 			PublishOnUpload:   CLI.Server.PublishOnUpload,
 		})
 	case "client":
-		requireDir(CLI.Client.DataDir)
+		ensureDir(CLI.Client.DataDir)
 		revs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo)
 	case "clientserver":
-		requireDir(CLI.ClientServer.DataDir)
+		ensureDir(CLI.ClientServer.DataDir)
 		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
 			Listen:            CLI.ClientServer.ServerListen,
 			CutInterval:       CLI.ClientServer.CutInterval,
@@ -304,12 +304,11 @@ func signDocument(data []byte, key ed25519.PrivateKey) ([]byte, error) {
 	return signed, err
 }
 
-// requireDir replaces kong's existingdir flag type, whose validation is
-// skipped for values supplied by config-file resolvers.
-func requireDir(path string) {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "revs: data directory %q does not exist\n", path)
+// ensureDir creates a server data directory if it doesn't exist yet,
+// as the tui and ui commands do for theirs.
+func ensureDir(path string) {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "revs: data directory: %v\n", err)
 		os.Exit(1)
 	}
 }
