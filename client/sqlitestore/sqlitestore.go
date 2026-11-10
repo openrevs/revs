@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS push (
 	hash TEXT NOT NULL,
 	server_rev INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS history (
+	userid TEXT PRIMARY KEY,
+	foreign_rev INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history_versions (
+	userid TEXT NOT NULL,
+	seq INTEGER NOT NULL,
+	rev INTEGER NOT NULL,
+	hash TEXT NOT NULL,
+	data BLOB NOT NULL,
+	PRIMARY KEY (userid, seq)
+);
 `
 
 type Store struct {
@@ -192,6 +204,57 @@ func (s *Store) SaveState(state *client.State) error {
 	for id, p := range state.Push {
 		if _, err := tx.Exec(`INSERT INTO push (userid, rev, hash, server_rev) VALUES (?, ?, ?, ?)`,
 			id, p.Rev, p.Hash, p.ServerRev); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Store) LoadHistory(userID string) (*client.VersionHistory, error) {
+	h := &client.VersionHistory{}
+	err := s.db.QueryRow(`SELECT foreign_rev FROM history WHERE userid = ?`, userID).Scan(&h.ForeignRev)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(`SELECT rev, hash, data FROM history_versions WHERE userid = ? ORDER BY seq`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v client.StoredVersion
+		if err := rows.Scan(&v.Rev, &v.Hash, &v.Data); err != nil {
+			return nil, err
+		}
+		h.Versions = append(h.Versions, v)
+	}
+
+	return h, rows.Err()
+}
+
+// SaveHistory replaces a user's history in one transaction.
+func (s *Store) SaveHistory(userID string, h *client.VersionHistory) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO history (userid, foreign_rev) VALUES (?, ?)
+		ON CONFLICT (userid) DO UPDATE SET foreign_rev = excluded.foreign_rev`, userID, h.ForeignRev); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM history_versions WHERE userid = ?`, userID); err != nil {
+		return err
+	}
+	for i, v := range h.Versions {
+		if _, err := tx.Exec(`INSERT INTO history_versions (userid, seq, rev, hash, data) VALUES (?, ?, ?, ?, ?)`,
+			userID, i, v.Rev, v.Hash, v.Data); err != nil {
 			return err
 		}
 	}

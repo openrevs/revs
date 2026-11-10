@@ -62,7 +62,7 @@ func (a *App) remote(serverID int64, serverURL string) (*remote, error) {
 		store:  store,
 		db:     db,
 		q:      remotedb.New(db),
-		client: client.New(serverURL, store, client.WithHTTPClient(a.http)),
+		client: client.New(serverURL, store, client.WithHTTPClient(a.http), client.WithHistory(a.versions)),
 	}
 	a.remotes[serverID] = r
 	return r, nil

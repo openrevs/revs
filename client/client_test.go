@@ -10,12 +10,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/fsstore"
+	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/openrevs/revs/keys"
 	"github.com/stretchr/testify/require"
 )
@@ -490,4 +492,248 @@ func mustParseKey(t *testing.T, s string) ed25519.PublicKey {
 	require.NoError(t, err)
 
 	return key
+}
+
+// recordUploads proxies to upstream, recording the sjsonl type ("doc"
+// or "patch") of each upload body.
+func recordUploads(t *testing.T, upstream string) (*httptest.Server, *[]string) {
+	t.Helper()
+
+	var kinds []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		if r.URL.Path == "/upload" {
+			first, _, _ := bytes.Cut(body, []byte("\n"))
+			var ctl struct {
+				SJSONL string `json:"sjsonl"`
+			}
+			require.NoError(t, json.Unmarshal(first, &ctl))
+			kinds = append(kinds, ctl.SJSONL)
+		}
+
+		req, err := http.NewRequest(r.Method, upstream+r.URL.Path, bytes.NewReader(body))
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+	}))
+	t.Cleanup(proxy.Close)
+
+	return proxy, &kinds
+}
+
+func TestPatchPush(t *testing.T) {
+	ctx := context.Background()
+	s, ts := startServer(t)
+	proxy, kinds := recordUploads(t, ts.URL)
+
+	key := newKey(t)
+	uid := client.UserID(key.Public().(ed25519.PublicKey))
+	titles := manyTitles(50)
+
+	deviceA := newClient(t, proxy.URL)
+
+	// The first push has no base, so it is a full document; later pushes
+	// patch against the previous push.
+	_, err := deviceA.Push(ctx, key, content(key, titles[:40]...))
+	require.NoError(t, err)
+	pr, err := deviceA.Push(ctx, key, content(key, titles[:41]...))
+	require.NoError(t, err)
+	require.Equal(t, 2, pr.Rev)
+	require.Equal(t, []string{"doc", "patch"}, *kinds)
+
+	_, err = s.Cut(ctx)
+	require.NoError(t, err)
+
+	consumer := newClient(t, ts.URL)
+	_, err = consumer.Sync(ctx)
+	require.NoError(t, err)
+	doc, err := consumer.Document(uid)
+	require.NoError(t, err)
+	require.Equal(t, 2, doc.Rev)
+	require.Equal(t, pr.Hash, doc.Hash)
+
+	// A device that has only pulled patches against its synced head.
+	deviceB := newClient(t, proxy.URL)
+	_, err = deviceB.Sync(ctx)
+	require.NoError(t, err)
+	*kinds = nil
+	pr, err = deviceB.Push(ctx, key, content(key, titles[:42]...))
+	require.NoError(t, err)
+	require.Equal(t, 3, pr.Rev)
+	require.Equal(t, []string{"patch"}, *kinds)
+
+	// Device A's base (rev 2) is no longer the server's latest: the patch
+	// is refused, and the server's reported rev 3 makes it stale.
+	*kinds = nil
+	_, err = deviceA.Push(ctx, key, content(key, titles[:43]...))
+	var stale *client.StaleError
+	require.ErrorAs(t, err, &stale)
+	require.Equal(t, 3, stale.LatestRev)
+	require.Equal(t, []string{"patch"}, *kinds)
+}
+
+// uploadDoc posts a signed document straight to a server, standing in
+// for one server pulling it from another.
+func uploadDoc(t *testing.T, url string, doc []byte) {
+	t.Helper()
+
+	resp, err := http.Post(url+"/upload", "application/jsonl", bytes.NewReader(doc))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestPushAcrossServers(t *testing.T) {
+	ctx := context.Background()
+	_, tsA := startServer(t)
+	_, tsB := startServer(t)
+	proxyA, kindsA := recordUploads(t, tsA.URL)
+	proxyB, kindsB := recordUploads(t, tsB.URL)
+
+	key := newKey(t)
+	uid := client.UserID(key.Public().(ed25519.PublicKey))
+	titles := manyTitles(50)
+
+	// One author history shared by a client per server.
+	hs, err := fsstore.New(t.TempDir())
+	require.NoError(t, err)
+	history := client.NewHistory(hs)
+	toA := newClient(t, proxyA.URL, client.WithHistory(history))
+	toB := newClient(t, proxyB.URL, client.WithHistory(history))
+
+	pr, err := toA.Push(ctx, key, content(key, titles[:40]...))
+	require.NoError(t, err)
+	require.Equal(t, 1, pr.Rev)
+
+	// Revisions are the author's, not per server: B gets the same rev 1
+	// document, then rev 2.
+	pr, err = toB.Push(ctx, key, content(key, titles[:40]...))
+	require.NoError(t, err)
+	require.True(t, pr.Pushed)
+	require.Equal(t, 1, pr.Rev)
+
+	pr, err = toB.Push(ctx, key, content(key, titles[:41]...))
+	require.NoError(t, err)
+	require.Equal(t, 2, pr.Rev)
+	require.Equal(t, []string{"doc", "patch"}, *kindsB)
+
+	// A pulls rev 2 from B behind our back.
+	rev2, err := history.Version(uid, pr.Hash)
+	require.NoError(t, err)
+	uploadDoc(t, tsA.URL, rev2.Data)
+
+	// Pushing rev 3 to A: the patch against rev 1 is refused, A reports
+	// rev 2, which the history holds, so the second patch is against it.
+	*kindsA = nil
+	pr, err = toA.Push(ctx, key, content(key, titles[:42]...))
+	require.NoError(t, err)
+	require.True(t, pr.Pushed)
+	require.Equal(t, 3, pr.Rev)
+	require.Equal(t, []string{"patch", "patch"}, *kindsA)
+
+	// B pulls rev 3 from A; pushing the same content to B finds it there.
+	rev3, err := history.Version(uid, pr.Hash)
+	require.NoError(t, err)
+	uploadDoc(t, tsB.URL, rev3.Data)
+
+	*kindsB = nil
+	pr, err = toB.Push(ctx, key, content(key, titles[:42]...))
+	require.NoError(t, err)
+	require.False(t, pr.Pushed)
+	require.Equal(t, 3, pr.Rev)
+	require.Equal(t, []string{"patch"}, *kindsB)
+}
+
+func historyStores(t *testing.T) map[string]func() client.HistoryStore {
+	dir := t.TempDir()
+	path := filepath.Join(t.TempDir(), "history.db")
+
+	return map[string]func() client.HistoryStore{
+		"fsstore": func() client.HistoryStore {
+			s, err := fsstore.New(dir)
+			require.NoError(t, err)
+			return s
+		},
+		"sqlitestore": func() client.HistoryStore {
+			s, err := sqlitestore.New(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { s.Close() })
+			return s
+		},
+	}
+}
+
+func TestHistory(t *testing.T) {
+	for name, open := range historyStores(t) {
+		t.Run(name, func(t *testing.T) {
+			key := newKey(t)
+			uid := client.UserID(key.Public().(ed25519.PublicKey))
+			titles := manyTitles(30)
+
+			store := open()
+			h := client.NewHistory(store, client.WithHistoryLimit(5))
+
+			_, err := h.Latest(uid)
+			require.ErrorIs(t, err, client.ErrNotFound)
+
+			// Each change is a new revision; unchanged content is not.
+			var docs []*client.Document
+			for i := range 8 {
+				doc, err := h.Commit(key, content(key, titles[:20+i]...))
+				require.NoError(t, err)
+				require.Equal(t, i+1, doc.Rev)
+				docs = append(docs, doc)
+			}
+			again, err := h.Commit(key, content(key, titles[:27]...))
+			require.NoError(t, err)
+			require.Equal(t, docs[7], again)
+
+			// A revision known elsewhere forces the next commit past it,
+			// even with unchanged content.
+			// A known rev of our own changes nothing.
+			require.NoError(t, h.NoteRev(uid, 8, docs[7].Hash))
+			again, err = h.Commit(key, content(key, titles[:27]...))
+			require.NoError(t, err)
+			require.Equal(t, docs[7], again)
+
+			require.NoError(t, h.NoteRev(uid, 10, ""))
+			bumped, err := h.Commit(key, content(key, titles[:27]...))
+			require.NoError(t, err)
+			require.Equal(t, 11, bumped.Rev)
+			docs = append(docs, bumped)
+
+			// Reopened from the store: the newest 5 versions are rebuilt
+			// exactly; older ones were dropped.
+			h = client.NewHistory(open(), client.WithHistoryLimit(5))
+			latest, err := h.Latest(uid)
+			require.NoError(t, err)
+			require.Equal(t, bumped, latest)
+
+			for i, doc := range docs {
+				got, err := h.Version(uid, doc.Hash)
+				if i < len(docs)-5 {
+					require.ErrorIs(t, err, client.ErrNotFound, "rev %d", doc.Rev)
+					continue
+				}
+				require.NoError(t, err, "rev %d", doc.Rev)
+				require.Equal(t, doc, got)
+			}
+
+			// Older versions are stored as patches, not full documents.
+			vh, err := store.LoadHistory(uid)
+			require.NoError(t, err)
+			require.Len(t, vh.Versions, 5)
+			for _, v := range vh.Versions[:4] {
+				require.True(t, bytes.HasPrefix(v.Data, []byte(`{"sjsonl":"patch"`)), "rev %d", v.Rev)
+			}
+		})
+	}
 }

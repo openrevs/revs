@@ -9,13 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/ui/localdb"
-	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
 )
 
@@ -113,10 +112,10 @@ func titleFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Title2 {
 	return t
 }
 
-// signExport signs the collection for export. The revision is the
-// local document revision, bumped only when content has changed since
-// it was last assigned, and never below a revision already pushed to a
-// server (so an exported file supersedes what servers hold).
+// signExport signs the collection for export as the author's newest
+// version, the same one a push would upload: its revision is bumped only
+// when content has changed, and never below a revision already pushed to
+// a server (so an exported file supersedes what servers hold).
 func (a *App) signExport(ctx context.Context, key ed25519.PrivateKey) ([]byte, int, error) {
 	uid := keys.UserID(key.Public().(ed25519.PublicKey))
 	content, err := buildContent(ctx, a.q, uid)
@@ -124,63 +123,33 @@ func (a *App) signExport(ctx context.Context, key ed25519.PrivateKey) ([]byte, i
 		return nil, 0, err
 	}
 
-	rev := a.settingInt(ctx, settingDocRev)
-	prevHash := a.setting(ctx, settingDocHash)
-
+	// Before the first version, account for revisions assigned before
+	// the version history existed: the last export, and pushes.
+	known := a.settingInt(ctx, settingDocRev)
 	servers, err := a.q.ListServers(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	pushed := 0
 	for _, s := range servers {
 		if s.LastPushRev != nil {
-			pushed = max(pushed, int(*s.LastPushRev))
+			known = max(known, int(*s.LastPushRev))
 		}
 	}
-
-	if rev > 0 && rev >= pushed {
-		signed, hash, err := signAtRev(content, rev, key)
-		if err != nil {
+	_, err = a.versions.Latest(uid)
+	switch {
+	case errors.Is(err, client.ErrNotFound):
+		if err := a.versions.NoteRev(uid, known, ""); err != nil {
 			return nil, 0, err
 		}
-		if hash == prevHash {
-			return signed, rev, nil
-		}
+	case err != nil:
+		return nil, 0, err
 	}
 
-	rev = max(rev, pushed) + 1
-	signed, hash, err := signAtRev(content, rev, key)
+	doc, err := a.versions.Commit(key, content)
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := a.setSetting(ctx, settingDocRev, strconv.Itoa(rev)); err != nil {
-		return nil, 0, err
-	}
-	if err := a.setSetting(ctx, settingDocHash, hash); err != nil {
-		return nil, 0, err
-	}
-	return signed, rev, nil
-}
-
-// signAtRev sets the revision on the user line (the first line, as
-// buildContent writes it) and signs.
-func signAtRev(content []byte, rev int, key ed25519.PrivateKey) ([]byte, string, error) {
-	userLine, rest, _ := bytes.Cut(content, []byte("\n"))
-	var u revs.User2
-	if err := json.Unmarshal(userLine, &u); err != nil {
-		return nil, "", err
-	}
-	u.Revision = rev
-	userLine, err := json.Marshal(u)
-	if err != nil {
-		return nil, "", err
-	}
-
-	signed, info, err := jsonlines.Sign(slices.Concat(userLine, []byte("\n"), rest), key)
-	if err != nil {
-		return nil, "", err
-	}
-	return signed, info.Hash, nil
+	return doc.Data, doc.Rev, nil
 }
 
 // parsedDoc is a ratingset read for import.

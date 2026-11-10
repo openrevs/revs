@@ -451,3 +451,47 @@ func TestLoopbackHost(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rec.Code)
 	require.Empty(t, app.userID(context.Background()))
 }
+
+func TestRevisionsSharedAcrossServers(t *testing.T) {
+	var servers []string
+	for range 2 {
+		srv, err := revs.NewServer(t.TempDir())
+		require.NoError(t, err)
+		sts := httptest.NewServer(srv.Handler())
+		t.Cleanup(sts.Close)
+		servers = append(servers, sts.URL)
+	}
+
+	u := newTestUI(t)
+	u.post("/identity/generate", nil)
+	for _, s := range servers {
+		u.post("/servers", url.Values{"url": {s}})
+	}
+	u.post("/movies", url.Values{"title": {"Alien"}, "year": {"1979"}})
+
+	exportRev := func() int {
+		resp, err := u.c.Get(u.ts.URL + "/export.jsonl")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		doc, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		user, _, err := revs.ParseRatingset(doc)
+		require.NoError(t, err)
+		return user.Revision
+	}
+
+	// Export and both servers get the same version.
+	require.Equal(t, 1, exportRev())
+	_, msg := u.post("/servers/1/push", nil)
+	require.Contains(t, msg, "Pushed revision 1")
+	_, msg = u.post("/servers/2/push", nil)
+	require.Contains(t, msg, "Pushed revision 1")
+
+	// A change pushed to one server is the next revision everywhere.
+	u.post("/movies", url.Values{"title": {"Heat"}, "year": {"1995"}})
+	_, msg = u.post("/servers/2/push", nil)
+	require.Contains(t, msg, "Pushed revision 2")
+	_, msg = u.post("/servers/1/push", nil)
+	require.Contains(t, msg, "Pushed revision 2")
+	require.Equal(t, 2, exportRev())
+}

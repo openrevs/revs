@@ -7,10 +7,11 @@ type Head struct {
 	Hash string `json:"hash"`
 }
 
-// PushState tracks the last document this client pushed for a user. Rev
-// and Hash describe the last upload the server accepted; ServerRev
-// records a newer revision the server reported in a stale verdict, so
-// the next push can assert past it.
+// PushState tracks what the server is known to hold for a user. Rev and
+// Hash describe the newest document it is known to hold: the last
+// accepted push, or the latest it reported in a stale verdict. ServerRev
+// records a newer revision the server reported, so the next push asserts
+// past it. The documents themselves live in the author's History.
 type PushState struct {
 	Rev       int    `json:"rev,omitempty"`
 	Hash      string `json:"hash,omitempty"`

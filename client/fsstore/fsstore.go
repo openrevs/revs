@@ -1,7 +1,9 @@
 // Package fsstore is a client.Store backed by the local filesystem:
 // content-addressed blobs under <root>/docs/<hash[:2]>/<hash> (mirroring
 // the server's own blob layout) plus an atomically rewritten
-// <root>/state.json. It needs nothing beyond the standard library.
+// <root>/state.json, and an author's version history per user under
+// <root>/history/<userid>.json. It needs nothing beyond the standard
+// library.
 package fsstore
 
 import (
@@ -84,6 +86,54 @@ func (s *Store) SaveState(state *client.State) error {
 	}
 
 	return writeFileAtomic(filepath.Join(s.root, "state.json"), append(data, '\n'))
+}
+
+func (s *Store) historyPath(userID string) (string, error) {
+	if userID == "" || !isLowerHex(userID) {
+		return "", fmt.Errorf("fsstore: invalid user id %q", userID)
+	}
+
+	return filepath.Join(s.root, "history", userID+".json"), nil
+}
+
+func (s *Store) LoadHistory(userID string) (*client.VersionHistory, error) {
+	path, err := s.historyPath(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var h client.VersionHistory
+	if err := json.Unmarshal(data, &h); err != nil {
+		return nil, fmt.Errorf("fsstore: corrupt history file: %w", err)
+	}
+
+	return &h, nil
+}
+
+func (s *Store) SaveHistory(userID string, h *client.VersionHistory) error {
+	path, err := s.historyPath(userID)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	return writeFileAtomic(path, append(data, '\n'))
 }
 
 func isLowerHex(s string) bool {

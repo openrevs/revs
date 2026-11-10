@@ -1,6 +1,12 @@
 package revs
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -8,11 +14,18 @@ import (
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/util"
+	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
-// maxUploadSize bounds the size of an uploaded ratingset.
-const maxUploadSize = 10 << 20
+// maxDocumentSize bounds the size of an accepted ratingset. It also caps
+// the upload body, but is checked again after any patch is applied, so a
+// series of small patches can't grow a document without limit.
+const maxDocumentSize = 1 << 20
 
+// uploadResponse is the upload verdict. On a conflict (stale or
+// base_mismatch), Rev and Hash describe the user's latest accepted
+// document, so a client can tell whether the server already holds its
+// version, or patch against the one it does hold.
 type uploadResponse struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
@@ -23,9 +36,52 @@ type uploadResponse struct {
 // uploadPost handles document uploads synchronously: verify, check rev
 // monotonicity, persist, and return a final verdict.
 func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxUploadSize))
+	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxDocumentSize))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
+		return
+	}
+
+	// A patch upload must be based on the latest accepted document. The
+	// result is the full signed document, which goes through exactly the
+	// same checks as a full upload.
+	var latest *domain.Document
+	if ctl, isPatch, err := patchControl(body); isPatch {
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
+			return
+		}
+		latest, err = s.dal.LatestDocument(req.Context(), ctl.userID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+			return
+		}
+		if latest == nil || latest.Hash != ctl.Base {
+			resp := uploadResponse{Status: "base_mismatch", Reason: "patch base is not the latest accepted document"}
+			if latest != nil {
+				resp.Rev, resp.Hash = latest.Rev, latest.Hash
+			}
+			writeJSON(w, http.StatusConflict, resp)
+			return
+		}
+
+		base, err := s.docs.Get(latest.Hash)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: fmt.Sprintf("loading base document: %v", err)})
+			return
+		}
+		body, _, err = jsonlines.Patch(base, body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: fmt.Sprintf("applying patch: %v", err)})
+			return
+		}
+	}
+
+	if len(body) > maxDocumentSize {
+		writeJSON(w, http.StatusBadRequest, uploadResponse{
+			Status: "invalid",
+			Reason: fmt.Sprintf("document is %d bytes, exceeding the %d byte limit", len(body), maxDocumentSize),
+		})
 		return
 	}
 
@@ -40,10 +96,12 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	latest, err := s.dal.LatestDocument(req.Context(), user.ID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
-		return
+	if latest == nil {
+		latest, err = s.dal.LatestDocument(req.Context(), user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+			return
+		}
 	}
 
 	if latest != nil && user.Revision <= latest.Rev {
@@ -51,6 +109,7 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 			Status: "stale",
 			Reason: "revision is not greater than the latest accepted revision",
 			Rev:    latest.Rev,
+			Hash:   latest.Hash,
 		})
 		return
 	}
@@ -91,4 +150,36 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, uploadResponse{Status: "accepted", Rev: user.Revision, Hash: info.Hash})
+}
+
+// uploadPatch is what the upload handler needs from a patch's sjsonl
+// control line before applying it.
+type uploadPatch struct {
+	Base   string
+	userID string
+}
+
+// patchControl reports whether body is an sjsonl patch and, if so,
+// returns its base hash and the user id derived from its key. The key
+// is unverified here: it only selects which user's latest document the
+// patch must apply to. Applying the patch verifies the signature over
+// the result, and ParseRatingset then checks the user line against it.
+func patchControl(body []byte) (uploadPatch, bool, error) {
+	first, _, _ := bytes.Cut(body, []byte("\n"))
+
+	var ctl struct {
+		SJSONL string `json:"sjsonl"`
+		Key    string `json:"key"`
+		Base   string `json:"base"`
+	}
+	if err := json.Unmarshal(first, &ctl); err != nil || ctl.SJSONL != "patch" {
+		return uploadPatch{}, false, nil
+	}
+
+	key, err := base64.StdEncoding.DecodeString(ctl.Key)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return uploadPatch{}, true, errors.New("patch must be signed by a valid ed25519 key")
+	}
+
+	return uploadPatch{Base: ctl.Base, userID: userID(ed25519.PublicKey(key))}, true, nil
 }

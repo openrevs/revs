@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,16 +13,17 @@ import (
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
-// PushResult summarizes one Push call. Pushed is false when the content
-// was unchanged from what the server already holds, so no upload was
-// made; Rev and Hash then describe that existing revision.
+// PushResult summarizes one Push call. Pushed is false when the server
+// already held the version, so nothing was uploaded; Rev and Hash
+// describe the version either way.
 type PushResult struct {
 	Pushed bool
 	Rev    int
 	Hash   string
 }
 
-// uploadVerdict is the server's response to an upload.
+// uploadVerdict is the server's response to an upload. On a conflict,
+// Rev and Hash describe the server's latest document for the user.
 type uploadVerdict struct {
 	Status string `json:"status"`
 	Reason string `json:"reason"`
@@ -29,17 +31,27 @@ type uploadVerdict struct {
 	Hash   string `json:"hash"`
 }
 
-// Push signs content with key and uploads it, owning the protocol's
-// revision discipline: the revision field is asserted by this call (any
-// value already in the content is overwritten), bumped only past the
-// newest revision this client knows for the user, and not bumped at all
-// — no upload happens — when the content is unchanged.
+// statusBaseMismatch is the server's verdict when a patch upload's base
+// is not the latest document it holds for the user.
+const statusBaseMismatch = "base_mismatch"
+
+// maxUploadAttempts bounds Push's uploads: a patch against the version
+// the server is believed to hold, a patch against the version it then
+// reports, and a full document.
+const maxUploadAttempts = 3
+
+// Push commits content to the author's History (see History.Commit,
+// which owns revision assignment) and uploads the resulting version.
 //
-// content is unsigned JSONL data lines, exactly one of which carries the
-// user's "id" (which must match the id derived from key).
+// The upload is a patch against the version this server is believed to
+// hold, when the History (or this server's pulled corpus) has that
+// version and the patch is smaller. Servers can pull from each other,
+// so that belief may be out of date; if the server reports a different
+// base, Push patches against that one instead, or falls back to the
+// full document.
 //
-// A StaleError means the server holds a newer revision than we knew —
-// typically a push from another device. It is surfaced rather than
+// A StaleError means the server holds a newer revision than the version
+// — typically a push from another device. It is surfaced rather than
 // retried because pushing over it may stomp that device's data; the
 // server's revision is recorded, so once the application has resolved
 // the conflict (e.g. merged content), the next Push asserts past it.
@@ -47,77 +59,134 @@ func (c *Client) Push(ctx context.Context, key ed25519.PrivateKey, content []byt
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.history == nil {
+		return nil, errors.New("client: Push needs a History (WithHistory) or a Store that implements HistoryStore")
+	}
+	h := c.history
+
 	if err := c.ensureState(); err != nil {
 		return nil, err
 	}
 
 	uid := userIDFromKey(key.Public().(ed25519.PublicKey))
+	ps := c.state.Push[uid]
+	head := c.state.Heads[uid]
 
-	lines, idLine, contentID, err := parseContent(content)
+	// Fold what this server is known to hold into the History, so the
+	// version asserts past it, and pulled content that is unchanged is
+	// recognized as such.
+	if head.Rev > 0 {
+		data, err := c.store.GetBlob(head.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("client: loading head document %s: %w", head.Hash, err)
+		}
+		if err := h.adopt(&Document{UserID: uid, Rev: head.Rev, Hash: head.Hash, Data: data}); err != nil {
+			return nil, err
+		}
+	}
+	for _, known := range []Head{head, {Rev: ps.Rev, Hash: ps.Hash}, {Rev: ps.ServerRev}} {
+		if err := h.NoteRev(uid, known.Rev, known.Hash); err != nil {
+			return nil, err
+		}
+	}
+
+	v, err := h.Commit(key, content)
 	if err != nil {
 		return nil, err
 	}
-	if contentID != uid {
-		return nil, fmt.Errorf("client: content id %q does not match signing key (user %s)", contentID, uid)
+
+	// The newest document this server is believed to hold.
+	held := Head{Rev: ps.Rev, Hash: ps.Hash}
+	if head.Rev > held.Rev {
+		held = head
 	}
 
-	ps := c.state.Push[uid]
-	head := c.state.Heads[uid]
-	base := max(ps.Rev, ps.ServerRev, head.Rev)
+	done := func(pushed bool) (*PushResult, error) {
+		c.state.Push[uid] = PushState{Rev: v.Rev, Hash: v.Hash}
+		if err := c.store.SaveState(c.state); err != nil {
+			return nil, err
+		}
+		return &PushResult{Pushed: pushed, Rev: v.Rev, Hash: v.Hash}, nil
+	}
 
-	if base > 0 {
-		// Changed means changed with the revision held constant: sign a
-		// candidate at the base revision and compare hashes against the
-		// last push and the pulled head. Equal to either → the server
-		// already holds this content; an upload would be an empty bump.
-		_, candHash, err := signWithRev(lines, idLine, base, key)
+	if held.Hash == v.Hash {
+		return done(false)
+	}
+
+	for range maxUploadAttempts {
+		body := v.Data
+		if patch := c.patchFrom(uid, held.Hash, v.Data); patch != nil {
+			body = patch
+		}
+
+		verdict, status, err := c.upload(ctx, body)
 		if err != nil {
 			return nil, err
 		}
-		if (ps.Rev == base && ps.Hash == candHash) || (head.Rev == base && head.Hash == candHash) {
-			c.state.Push[uid] = PushState{Rev: base, Hash: candHash}
+
+		switch {
+		case status == http.StatusOK:
+			return done(true)
+
+		case status == http.StatusConflict && verdict.Hash == v.Hash:
+			// The server already holds this version, e.g. pulled from
+			// another server.
+			return done(false)
+
+		case status == http.StatusConflict && verdict.Status == statusBaseMismatch && verdict.Rev < v.Rev:
+			// The server holds an older version than we thought (or
+			// none): patch against that one, or send the full document.
+			held = Head{Rev: verdict.Rev, Hash: verdict.Hash}
+			continue
+
+		case status == http.StatusConflict:
+			// Record the fact of the newer revision — the content
+			// decision stays with the application.
+			serverRev := max(verdict.Rev, v.Rev)
+			c.state.Push[uid] = PushState{Rev: verdict.Rev, Hash: verdict.Hash, ServerRev: serverRev}
 			if err := c.store.SaveState(c.state); err != nil {
 				return nil, err
 			}
-			return &PushResult{Pushed: false, Rev: base, Hash: candHash}, nil
+			if err := h.NoteRev(uid, serverRev, ""); err != nil {
+				return nil, err
+			}
+			return nil, &StaleError{UserID: uid, LatestRev: serverRev, Reason: verdict.Reason}
+
+		case status == http.StatusBadRequest:
+			return nil, &RejectedError{Reason: verdict.Reason}
+
+		default:
+			return nil, fmt.Errorf("client: upload failed with status %d: %s", status, verdict.Reason)
 		}
 	}
 
-	rev := base + 1
-	signed, hash, err := signWithRev(lines, idLine, rev, key)
-	if err != nil {
-		return nil, err
+	return nil, fmt.Errorf("client: upload of revision %d not settled after %d attempts", v.Rev, maxUploadAttempts)
+}
+
+// patchFrom returns a patch from the user's document with hash base to
+// doc, or nil if a full upload is the better choice: no base, the base
+// isn't held (in the History, or in this server's pulled corpus), or the
+// patch isn't smaller. Callers hold c.mu.
+func (c *Client) patchFrom(uid, base string, doc []byte) []byte {
+	if base == "" {
+		return nil
 	}
 
-	verdict, status, err := c.upload(ctx, signed)
-	if err != nil {
-		return nil, err
+	var baseDoc []byte
+	if v, err := c.history.Version(uid, base); err == nil {
+		baseDoc = v.Data
+	} else if data, err := c.store.GetBlob(base); err == nil {
+		baseDoc = data
+	} else {
+		return nil
 	}
 
-	switch status {
-	case http.StatusOK:
-		c.state.Push[uid] = PushState{Rev: rev, Hash: hash}
-		if err := c.store.SaveState(c.state); err != nil {
-			return nil, err
-		}
-		return &PushResult{Pushed: true, Rev: rev, Hash: hash}, nil
-
-	case http.StatusConflict:
-		// Record the fact of the newer revision — the content decision
-		// stays with the application.
-		serverRev := max(verdict.Rev, rev)
-		c.state.Push[uid] = PushState{Rev: ps.Rev, Hash: ps.Hash, ServerRev: serverRev}
-		if err := c.store.SaveState(c.state); err != nil {
-			return nil, err
-		}
-		return nil, &StaleError{UserID: uid, LatestRev: serverRev, Reason: verdict.Reason}
-
-	case http.StatusBadRequest:
-		return nil, &RejectedError{Reason: verdict.Reason}
-
-	default:
-		return nil, fmt.Errorf("client: upload failed with status %d: %s", status, verdict.Reason)
+	patch, err := jsonlines.Diff(baseDoc, doc)
+	if err != nil || len(patch) >= len(doc) {
+		return nil
 	}
+
+	return patch
 }
 
 func (c *Client) upload(ctx context.Context, doc []byte) (*uploadVerdict, int, error) {

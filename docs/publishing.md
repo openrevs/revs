@@ -16,14 +16,42 @@ fetchable independently of the artifacts they describe.
 ## Ingest
 
 Uploads are handled synchronously — the queue/processor design is gone.
-The upload handler:
+An upload is either a full signed document or a signed sjsonl patch
+against the user's latest accepted document. The upload handler:
 
-1. Verifies the document (sjsonl signature, user id matches signing key).
-2. Checks the asserted rev is strictly greater than the latest accepted
+1. If the body is a patch: derives the user id from the patch's key,
+   checks the patch `base` equals the hash of that user's latest
+   accepted document (else `409` with status `base_mismatch` and the
+   latest rev), and applies it. The result is the full signed target
+   document, which is handled exactly like a full upload from here on.
+2. Checks the document is at most 1 MiB (`maxDocumentSize`). The same
+   limit caps the upload body, but it is checked again after patching,
+   so patches can't grow a document past it.
+3. Verifies the document (sjsonl signature, user id matches signing key).
+4. Checks the asserted rev is strictly greater than the latest accepted
    rev for that user.
-3. Persists the document.
-4. Returns a final verdict: `200` accepted, `400` invalid,
-   `409` stale rev. JSON body carries the reason.
+5. Persists the document.
+6. Returns a final verdict: `200` accepted, `400` invalid,
+   `409` stale rev or patch base mismatch. JSON body carries the reason.
+
+Patches only save upload bandwidth; they don't change trust. The
+author's signature covers the full target document, and the server
+stores and republishes exactly that document.
+
+Conflict verdicts (`stale` and `base_mismatch`) carry the rev and hash
+of the user's latest accepted document.
+
+The client keeps the author's version history (`client.History`):
+every version it signs, the newest in full and older ones as signed
+reverse patches, capped at 100 by default. One history is shared by all
+the servers an author pushes to, and it assigns revisions, so a version
+has the same rev everywhere. Servers can pull from each other, so a
+server may hold any of the author's versions. To push, the client sends a
+patch against the version the server is believed to hold (if smaller
+than the full document). On `base_mismatch` it uses the reported
+hash: if that version is in the history, it re-diffs against it,
+otherwise it sends the full document. A conflict whose hash is the
+version being pushed means the server already has it.
 
 Revision numbers are **client-asserted** and live inside the signed
 document, where consumers can verify them against the author's

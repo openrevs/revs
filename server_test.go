@@ -353,3 +353,130 @@ func TestPublishOnUpload(t *testing.T) {
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 	assert.Equal(t, 2, epoch())
 }
+
+func decodeVerdict(t *testing.T, resp *http.Response) uploadResponse {
+	t.Helper()
+
+	var verdict uploadResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&verdict))
+	return verdict
+}
+
+func diff(t *testing.T, base, target []byte) []byte {
+	t.Helper()
+
+	patch, err := jsonlines.Diff(base, target)
+	require.NoError(t, err)
+	return patch
+}
+
+func TestPatchUpload(t *testing.T) {
+	s, ts := newTestServer(t)
+	ctx := context.Background()
+	u := NewUser()
+	other := NewUser()
+
+	rev1 := signedDoc(t, u, 1, "Alien")
+	rev2 := signedDoc(t, u, 2, "Alien", "Heat")
+	rev3 := signedDoc(t, u, 3, "Alien", "Heat", "Ran")
+
+	// A patch with no accepted base is a base mismatch, not a stale rev.
+	resp := upload(t, ts, diff(t, rev1, rev2))
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, "base_mismatch", decodeVerdict(t, resp).Status)
+
+	require.Equal(t, http.StatusOK, upload(t, ts, rev1).StatusCode)
+
+	// A patch against the latest document is applied and stored as the
+	// full signed target.
+	resp = upload(t, ts, diff(t, rev1, rev2))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	verdict := decodeVerdict(t, resp)
+	assert.Equal(t, 2, verdict.Rev)
+
+	want, wantHash := canonical(t, rev2)
+	assert.Equal(t, wantHash, verdict.Hash)
+	stored, err := s.docs.Get(wantHash)
+	require.NoError(t, err)
+	assert.Equal(t, want, stored)
+
+	latest, err := s.dal.LatestDocument(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, latest.Rev)
+
+	// A patch against an older document is a base mismatch, reporting
+	// the latest rev.
+	resp = upload(t, ts, diff(t, rev1, rev3))
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	verdict = decodeVerdict(t, resp)
+	assert.Equal(t, "base_mismatch", verdict.Status)
+	assert.Equal(t, 2, verdict.Rev)
+	assert.Equal(t, wantHash, verdict.Hash)
+
+	// The right base but a non-advancing rev is still stale.
+	resp = upload(t, ts, diff(t, rev2, signedDoc(t, u, 2, "Alien", "Heat", "Ran")))
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	verdict = decodeVerdict(t, resp)
+	assert.Equal(t, "stale", verdict.Status)
+	assert.Equal(t, wantHash, verdict.Hash)
+
+	// Unsigned patches are rejected.
+	unsigned, err := jsonlines.DiffUnsigned(rev2, rev3)
+	require.NoError(t, err)
+	resp = upload(t, ts, unsigned)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// Another user can't patch this user's document: the patch's key
+	// selects the other user, whose latest document isn't the base.
+	resp = upload(t, ts, diff(t, rev2, signedDoc(t, other, 3, "Alien")))
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, "base_mismatch", decodeVerdict(t, resp).Status)
+
+	resp = upload(t, ts, diff(t, rev2, rev3))
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestUploadSizeLimits(t *testing.T) {
+	_, ts := newTestServer(t)
+	u := NewUser()
+
+	// titles returns n distinct title lines of about 64 bytes each,
+	// starting at index from.
+	titles := func(from, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("A Movie With a Fairly Long Name For Padding, Number %08d", from+i)
+		}
+		return out
+	}
+
+	// A full document over the limit is rejected outright.
+	resp := upload(t, ts, signedDoc(t, u, 1, titles(0, maxDocumentSize/64+100)...))
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// A full document between the old 256 KiB body cap and the document
+	// limit is fine without a patch.
+	prev := signedDoc(t, u, 1, titles(0, 6000)...)
+	require.Greater(t, len(prev), 256<<10)
+	require.Equal(t, http.StatusOK, upload(t, ts, prev).StatusCode)
+
+	// Grow the document with small patches until the result would exceed
+	// the document limit: the limit applies to the patched result.
+	const step = 2000
+	for rev := 2; ; rev++ {
+		next := signedDoc(t, u, rev, titles(0, 6000+(rev-1)*step)...)
+		patch := diff(t, prev, next)
+		require.Less(t, len(patch), maxDocumentSize)
+
+		resp := upload(t, ts, patch)
+		if len(next) <= maxDocumentSize {
+			require.Equal(t, http.StatusOK, resp.StatusCode, "rev %d (%d bytes)", rev, len(next))
+			prev = next
+			continue
+		}
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Contains(t, decodeVerdict(t, resp).Reason, "byte limit")
+		break
+	}
+}

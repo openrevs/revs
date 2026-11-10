@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/ui/localdb"
 )
@@ -50,6 +51,7 @@ type App struct {
 	dataDir  string
 	db       *sql.DB
 	q        *localdb.Queries
+	versions *client.History
 	http     *http.Client
 	wikidata *wikidata
 	pages    pages
@@ -94,6 +96,7 @@ func New(opts Options) (*App, error) {
 		dataDir:  opts.DataDir,
 		db:       db,
 		q:        localdb.New(db),
+		versions: client.NewHistory(historyStore{db}),
 		http:     httpClient,
 		wikidata: &wikidata{baseURL: wdURL, http: &http.Client{Timeout: 15 * time.Second}},
 		pages:    pages,
@@ -180,8 +183,7 @@ func openBrowser(url string) error {
 // Settings keys.
 const (
 	settingPrivateKey = "private_key" // base64 ed25519 seed
-	settingDocRev     = "doc_rev"     // revision of the last export
-	settingDocHash    = "doc_hash"    // doc hash of the last export
+	settingDocRev     = "doc_rev"     // revision of the last export, before the version history
 )
 
 func (a *App) setting(ctx context.Context, key string) string {

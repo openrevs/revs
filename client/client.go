@@ -33,6 +33,7 @@ type Client struct {
 	http    *http.Client
 	store   Store
 	pin     ed25519.PublicKey // optional pre-pinned server key
+	history *History
 
 	mu    sync.Mutex
 	state *State
@@ -43,6 +44,16 @@ type Option func(*Client)
 // WithHTTPClient replaces the http.Client used for all requests.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.http = h }
+}
+
+// WithHistory sets the author's version History that Push commits to
+// and builds patches from. An author pushing to several servers should
+// share one History across their Clients, since it assigns revisions
+// and servers can pull versions from each other. Without it, Push uses
+// a History over the Client's Store, if the Store implements
+// HistoryStore.
+func WithHistory(h *History) Option {
+	return func(c *Client) { c.history = h }
 }
 
 // WithServerKey pre-pins the server's public key, obtained out of band.
@@ -60,6 +71,9 @@ func New(baseURL string, store Store, opts ...Option) *Client {
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if hs, ok := store.(HistoryStore); ok && c.history == nil {
+		c.history = NewHistory(hs)
 	}
 	return c
 }
