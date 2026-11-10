@@ -1,8 +1,8 @@
 // Package client is a generic consumer of the revs publishing scheme
-// (docs/publishing.md). It pulls the published corpus — epochs, patches,
-// snapshots, manifests — verifying everything against the server's
-// signing key, and pushes signed documents with the revision discipline
-// the protocol asks of clients.
+// (wip-docs/publishing.md in the website repo). It pulls the published
+// corpus — epochs, patches, snapshots, manifests — verifying everything
+// against the server's signing key, and pushes signed documents with the
+// revision discipline the protocol asks of clients.
 //
 // The package traffics in raw signed sjsonl documents and knows nothing
 // about their contents; domain parsing layers on top. Local state lives
