@@ -26,13 +26,14 @@
 </html>
 
 {{define "rating-input"}}
-<fieldset class="rating">
-  <legend>Rating</legend>
-  <label><input type="radio" name="rating" value="none"{{if eq .Rating "none"}} checked{{end}}> No rating</label>
-  {{range seq 0 5}}
-  <label><input type="radio" name="rating" value="{{.}}"{{if eq $.Rating (print .)}} checked{{end}}> {{stars (int64 .)}}</label>
+<label>Rating
+<select name="rating" class="rating">
+  <option value="none"{{if eq .Rating "none"}} selected{{end}}>No rating</option>
+  {{range ratings}}
+  <option value="{{.Value}}"{{if eq $.Rating .Value}} selected{{end}}>{{.Stars}}&ensp;{{.Value}}</option>
   {{end}}
-</fieldset>
+</select>
+</label>
 {{end}}
 
 {{define "viewing-fields"}}

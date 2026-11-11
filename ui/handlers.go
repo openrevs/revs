@@ -70,6 +70,7 @@ func (a *App) Handler(loopbackOnly bool) http.Handler {
 	r.Get("/data", a.h(a.dataPage))
 	r.Get("/export.jsonl", a.h(a.export))
 	r.Post("/import", a.h(a.importFile))
+	r.Post("/import/csv", a.h(a.importCSV))
 
 	var h http.Handler = r
 	h = http.NewCrossOriginProtection().Handler(h)
@@ -617,8 +618,9 @@ func (a *App) dataPage(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	a.render(w, r, http.StatusOK, "data.html", view{Title: "Import & export", Nav: "data", Data: map[string]any{
-		"Counts": counts,
-		"HasKey": a.c.HasKey(r.Context()),
+		"Counts":   counts,
+		"HasKey":   a.c.HasKey(r.Context()),
+		"MaxStars": collection.MaxStars,
 	}})
 	return nil
 }
@@ -638,16 +640,22 @@ func (a *App) export(w http.ResponseWriter, r *http.Request) error {
 	return err
 }
 
-func (a *App) importFile(w http.ResponseWriter, r *http.Request) error {
+// uploadedFile reads the "file" field of an import form. It returns
+// nil data, having redirected, when no file was chosen.
+func uploadedFile(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportSize)
 	f, _, err := r.FormFile("file")
 	if err != nil {
 		redirect(w, r, "/data", "error", "Choose a file to import.")
-		return nil
+		return nil, nil
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
+	return io.ReadAll(f)
+}
+
+func (a *App) importFile(w http.ResponseWriter, r *http.Request) error {
+	data, err := uploadedFile(w, r)
+	if data == nil || err != nil {
 		return err
 	}
 
@@ -660,5 +668,23 @@ func (a *App) importFile(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	redirect(w, r, "/data", "ok", res.String())
+	return nil
+}
+
+func (a *App) importCSV(w http.ResponseWriter, r *http.Request) error {
+	data, err := uploadedFile(w, r)
+	if data == nil || err != nil {
+		return err
+	}
+
+	stats, err := a.c.ImportCSV(r.Context(), data)
+	if errors.Is(err, collection.ErrUnreadableFile) {
+		redirect(w, r, "/data", "error", "Could not read that CSV file: "+errors.Unwrap(err).Error())
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	redirect(w, r, "/data", "ok", stats.String())
 	return nil
 }

@@ -143,7 +143,7 @@ type ViewingInput struct {
 }
 
 // ViewingFields is a viewing as the user typed it. Rating is a number
-// of stars, or "" or "none" for unrated.
+// of stars in steps of ½ ("3.5"), or "" or "none" for unrated.
 type ViewingFields struct {
 	Date, Rating, Review string
 }
@@ -157,7 +157,7 @@ func NewViewingFields() ViewingFields {
 func ViewingFieldsFrom(v localdb.Viewing) ViewingFields {
 	f := ViewingFields{Date: Deref(v.ViewedOn), Review: v.Review, Rating: "none"}
 	if v.Rating != nil {
-		f.Rating = strconv.FormatInt(*v.Rating, 10)
+		f.Rating = FormatStars(*v.Rating)
 	}
 	return f
 }
@@ -181,9 +181,9 @@ func (f *ViewingFields) Parse() (ViewingInput, error) {
 	case "", "none":
 		f.Rating = "none"
 	default:
-		n, err := strconv.ParseInt(f.Rating, 10, 64)
-		if err != nil || n < MinRating || n > MaxRating {
-			errs = append(errs, fmt.Errorf("rating must be %d–%d stars", MinRating, MaxRating))
+		n, err := ParseStars(f.Rating)
+		if err != nil {
+			errs = append(errs, err)
 		} else {
 			in.Rating = &n
 		}

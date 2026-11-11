@@ -64,6 +64,16 @@ func (c *Collection) remote(serverID int64, serverURL string) (*remote, error) {
 		q:      remotedb.New(db),
 		client: client.New(serverURL, store, client.WithHTTPClient(c.http), client.WithHistory(c.versions)),
 	}
+	// An empty index over a non-empty corpus (after a migration that
+	// cleared it) is rebuilt from the pulled documents.
+	ctx := context.Background()
+	if n, err := r.q.CountIndexedUsers(ctx); err == nil && n == 0 {
+		if err := r.reindex(ctx, nil, true); err != nil {
+			db.Close()
+			store.Close()
+			return nil, fmt.Errorf("rebuilding review index: %w", err)
+		}
+	}
 	c.remotes[serverID] = r
 	return r, nil
 }
@@ -155,9 +165,14 @@ func (r *remote) reindex(ctx context.Context, userIDs []string, all bool) error 
 // doesn't know.
 func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Document) error {
 	var titles []revs.Title2
+	scale := ratingScale{legacyMin, legacyMax}
 	lines := bytes.Split(doc.Data, []byte("\n"))
 	for _, line := range lines[min(1, len(lines)):] { // skip the control line
-		if len(line) == 0 || gjson.GetBytes(line, "id").Exists() {
+		if len(line) == 0 {
+			continue
+		}
+		if gjson.GetBytes(line, "id").Exists() {
+			scale = scaleOf(line)
 			continue
 		}
 		var t revs.Title2
@@ -199,10 +214,7 @@ func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Documen
 		}
 		for _, rv := range t.Reviews {
 			rp := remotedb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date}
-			if rv.Rating != nil {
-				n := int64(*rv.Rating)
-				rp.Rating = &n
-			}
+			rp.Rating = scale.scale(rv.Rating)
 			if rv.Comment != nil {
 				rp.Comment = *rv.Comment
 			}

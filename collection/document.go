@@ -172,7 +172,9 @@ type parsedDoc struct {
 
 // parseRatingset reads a ratingset for import. A signed sjsonl document
 // is fully verified (signature, and user id matching the signing key);
-// an unsigned file of data lines is accepted as is.
+// an unsigned file of data lines is accepted as is. Ratings are
+// converted from the scale the user line declares to half stars; a
+// file without one is taken to use whole stars (0–5).
 func parseRatingset(data []byte) (*parsedDoc, error) {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
@@ -181,6 +183,7 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 
 	first, _, _ := bytes.Cut(data, []byte("\n"))
 	pd := &parsedDoc{}
+	scale := ratingScale{legacyMin, legacyMax}
 	lines := bytes.Split(data, []byte("\n"))
 
 	if gjson.GetBytes(first, "sjsonl").Exists() {
@@ -204,6 +207,7 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 		if id := gjson.GetBytes(line, "id"); id.Exists() {
 			if pd.UserID == "" {
 				pd.UserID = id.String()
+				scale = scaleOf(line)
 			}
 			continue
 		}
@@ -212,6 +216,19 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
 		pd.Titles = append(pd.Titles, t)
+	}
+
+	// Convert ratings to half stars (the user line comes first, so the
+	// scale is known by now).
+	for _, t := range pd.Titles {
+		for i, r := range t.Reviews {
+			if n := scale.scale(r.Rating); n != nil {
+				v := int(*n)
+				t.Reviews[i].Rating = &v
+			} else {
+				t.Reviews[i].Rating = nil
+			}
+		}
 	}
 
 	return pd, nil

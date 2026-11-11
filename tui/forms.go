@@ -289,7 +289,7 @@ func newViewingForm(m localdb.Movie, v *localdb.Viewing) *viewingForm {
 	f := &viewingForm{movie: m, viewing: v}
 	f.fields = []field{
 		lineField("Date", vf.Date, "YYYY-MM-DD, or blank if you don't remember", 12),
-		lineField("Rating", vf.Rating, fmt.Sprintf("%d–%d stars, or blank for no rating", collection.MinRating, collection.MaxRating), 3),
+		lineField("Rating", vf.Rating, fmt.Sprintf("0–%d stars in steps of ½ (e.g. 3.5), or blank for no rating", collection.MaxStars), 3),
 		areaField("Review", vf.Review, "", 70, 8),
 	}
 	f.setFocus(0)

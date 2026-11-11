@@ -111,14 +111,14 @@ func TestMoviesAndViewings(t *testing.T) {
 	require.Contains(t, h.a.flash, "already in your collection")
 
 	// Add a viewing: date, rating, review.
-	h.keys("v", "tab", "4", "tab", "Royale with cheese.", "ctrl+s")
+	h.keys("v", "tab", "3.5", "tab", "Royale with cheese.", "ctrl+s")
 	require.Contains(t, h.a.flash, "Viewing added")
 	vs, err := c.Viewings(ctx, movies[0].ID)
 	require.NoError(t, err)
 	require.Len(t, vs, 1)
-	require.Equal(t, int64(4), *vs[0].Rating)
+	require.Equal(t, int64(7), *vs[0].Rating, "stored in half stars")
 	require.Equal(t, "Royale with cheese.", vs[0].Review)
-	require.Contains(t, h.screen(), "★★★★☆")
+	require.Contains(t, h.screen(), "★★★½☆")
 
 	// A bad rating is refused with a message.
 	h.keys("v", "tab", "9", "ctrl+s")
@@ -127,11 +127,13 @@ func TestMoviesAndViewings(t *testing.T) {
 
 	// Edit the viewing.
 	h.keys("enter", "tab")
-	h.send(tea.KeyMsg{Type: tea.KeyBackspace})
+	for range 3 {
+		h.send(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
 	h.keys("5", "ctrl+s")
 	vs, err = c.Viewings(ctx, movies[0].ID)
 	require.NoError(t, err)
-	require.Equal(t, int64(5), *vs[0].Rating)
+	require.Equal(t, int64(10), *vs[0].Rating)
 
 	// Enter a movie by hand.
 	h.keys("1", "a", "My Home Movie", "ctrl+n")

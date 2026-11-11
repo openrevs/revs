@@ -15,8 +15,8 @@ func Deref[T any](p *T) T {
 	return *p
 }
 
-// Stars renders a 0–5 rating, or a dash when unrated. A negative rating
-// means unrated (Movies uses -1).
+// Stars renders a rating in half stars as five stars ("★★★½☆"), or a
+// dash when unrated. A negative rating means unrated (Movies uses -1).
 func Stars(r any) string {
 	var n int64 = -1
 	switch v := r.(type) {
@@ -31,7 +31,8 @@ func Stars(r any) string {
 		return "–"
 	}
 	n = min(n, MaxRating)
-	return strings.Repeat("★", int(n)) + strings.Repeat("☆", MaxRating-int(n))
+	full, half := int(n/2), int(n%2)
+	return strings.Repeat("★", full) + strings.Repeat("½", half) + strings.Repeat("☆", MaxStars-full-half)
 }
 
 // ShortID abbreviates a user id for display.

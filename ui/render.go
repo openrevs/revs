@@ -47,23 +47,15 @@ func parsePages() (pages, error) {
 }
 
 var funcs = template.FuncMap{
-	"stars":    collection.Stars,
-	"deref":    derefAny,
-	"short":    collection.ShortID,
-	"imdbURL":  func(id string) string { return collection.IMDBURL(url.PathEscape(id)) },
-	"tmdbURL":  func(id string) string { return collection.TMDBURL(url.PathEscape(id)) },
-	"wdURL":    func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
-	"today":    func() string { return time.Now().Format(collection.DateLayout) },
-	"ratingIs": func(r *int64, n int) bool { return r != nil && *r == int64(n) },
-	"seq": func(from, to int) []int {
-		s := []int{}
-		for i := from; i <= to; i++ {
-			s = append(s, i)
-		}
-		return s
-	},
+	"stars":   collection.Stars,
+	"deref":   derefAny,
+	"short":   collection.ShortID,
+	"imdbURL": func(id string) string { return collection.IMDBURL(url.PathEscape(id)) },
+	"tmdbURL": func(id string) string { return collection.TMDBURL(url.PathEscape(id)) },
+	"wdURL":   func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
+	"today":   func() string { return time.Now().Format(collection.DateLayout) },
+	"ratings": ratingOptions,
 	"timeAgo": collection.TimeAgo,
-	"int64":   func(n int) int64 { return int64(n) },
 	"dict":    dict,
 }
 
@@ -166,4 +158,15 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, status int, page st
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	buf.WriteTo(w)
+}
+
+// ratingOption is one choice of the rating picker, best first.
+type ratingOption struct{ Value, Stars string }
+
+func ratingOptions() []ratingOption {
+	var opts []ratingOption
+	for n := int64(collection.MaxRating); n >= collection.MinRating; n-- {
+		opts = append(opts, ratingOption{Value: collection.FormatStars(n), Stars: collection.Stars(n)})
+	}
+	return opts
 }

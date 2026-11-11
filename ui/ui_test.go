@@ -308,6 +308,9 @@ func TestImportUnsignedDraft(t *testing.T) {
 	m, err := u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "680", *m.TmdbID)
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), *vs[0].Rating, "5 of 5 is 10 half stars")
 	require.Equal(t, "tt0110912", *m.ImdbID)
 
 	// A later import matching by id fills in missing ids.
@@ -319,16 +322,74 @@ func TestImportUnsignedDraft(t *testing.T) {
 	require.Equal(t, "Pulp Fiction", m.Title, "an existing title is kept")
 }
 
+func TestImportCSV(t *testing.T) {
+	u := newTestUI(t)
+	ctx := context.Background()
+
+	// Header in any case and order, with an ignored column, a BOM, a
+	// quoted title, and two viewings of one movie.
+	file := "\xef\xbb\xbfNotes,Title,YEAR,rating,view_date,imdb_id,tmdb_id\n" +
+		"great,Pulp Fiction,1994,4.5,2020-01-01,tt0110912,680\n" +
+		"again,Pulp Fiction,1994,4,2021-06-01,,\n" +
+		`,"Crouching Tiger, Hidden Dragon",2000,,,,` + "\n" +
+		",Heat,,3,,,\n"
+	_, msg := u.uploadTo("/import/csv", []byte(file))
+	require.Contains(t, msg, "Imported 3 new movies (1 already present) and 3 new viewings (0 already present)")
+
+	m, err := u.app.c.Movie(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, "Pulp Fiction", m.Title)
+	require.Equal(t, "tt0110912", *m.ImdbID)
+	require.Equal(t, "680", *m.TmdbID)
+	m, err = u.app.c.Movie(ctx, 2)
+	require.NoError(t, err)
+	require.Equal(t, "Crouching Tiger, Hidden Dragon", m.Title)
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 2)
+	require.Equal(t, int64(9), *vs[1].Rating, "4.5 stars")
+
+	// Re-importing changes nothing.
+	_, msg = u.uploadTo("/import/csv", []byte(file))
+	require.Contains(t, msg, "Imported 0 new movies (4 already present) and 0 new viewings (3 already present)")
+
+	// Title-only files work.
+	_, msg = u.uploadTo("/import/csv", []byte("title\nAlien\n"))
+	require.Contains(t, msg, "Imported 1 new movies")
+
+	// Bad files are rejected whole.
+	for file, want := range map[string]string{
+		"year,rating\n1994,5\n":                `must include a &#34;title&#34; column`,
+		"title,rating\nOk,3\nAliens,9\n":       "line 3: rating must be 0–5 stars",
+		"title,rating\nOk,3\nAliens,3.25\n":    "line 3: rating must be 0–5 stars, in steps of ½",
+		"title,view_date\nAliens,01/02/2020\n": `line 2: date &#34;01/02/2020&#34; should be YYYY-MM-DD`,
+		"title,year\n,1994\n":                  "line 2: title is required",
+		"title\n":                              "no rows after the header",
+	} {
+		_, msg = u.uploadTo("/import/csv", []byte(file))
+		require.Contains(t, msg, "Could not read that CSV file", file)
+		require.Contains(t, msg, want, file)
+	}
+	counts, err := u.app.c.Counts(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 4, counts.Movies, "a rejected file imports nothing")
+}
+
 func (u *testUI) upload(data []byte) (string, string) {
+	u.t.Helper()
+	return u.uploadTo("/import", data)
+}
+
+func (u *testUI) uploadTo(path string, data []byte) (string, string) {
 	u.t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
-	fw, err := mw.CreateFormFile("file", "revs.sjsonl")
+	fw, err := mw.CreateFormFile("file", "upload")
 	require.NoError(u.t, err)
 	fw.Write(data)
 	mw.Close()
 
-	resp, err := u.c.Post(u.ts.URL+"/import", mw.FormDataContentType(), &body)
+	resp, err := u.c.Post(u.ts.URL+path, mw.FormDataContentType(), &body)
 	require.NoError(u.t, err)
 	resp.Body.Close()
 	page := u.get(resp.Header.Get("Location"))

@@ -34,9 +34,14 @@ import (
 	"github.com/openrevs/revs/keys"
 )
 
+// Ratings are stored and published in half stars: MinRating is no
+// stars and MaxRating is MaxStars stars. Ratingsets declare their scale
+// on the user line, so documents using another one are rescaled on
+// import (see scaleRating).
 const (
 	MinRating = 0
-	MaxRating = 5
+	MaxRating = 10
+	MaxStars  = MaxRating / 2
 )
 
 var (
