@@ -1,7 +1,9 @@
 // Package sqlitestore is a client.Store backed by a single SQLite
 // database file: blobs, heads, and sync state together, replacing
-// FSStore's directory tree. It suits simple personal clients that want
-// one corpus file they can inspect with the sqlite3 CLI.
+// FSStore's directory tree. Blobs are stored line-deduplicated (see
+// lines.go), so successive revisions of a document share storage. It
+// suits simple personal clients that want one corpus file they can
+// inspect with the sqlite3 CLI.
 //
 // It lives in its own package so that applications using other stores
 // don't inherit the sqlite driver dependency.
@@ -9,6 +11,7 @@ package sqlitestore
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -17,10 +20,6 @@ import (
 )
 
 const schema = `
-CREATE TABLE IF NOT EXISTS blobs (
-	hash TEXT PRIMARY KEY,
-	data BLOB NOT NULL
-);
 CREATE TABLE IF NOT EXISTS meta (
 	k TEXT PRIMARY KEY,
 	v TEXT NOT NULL
@@ -76,9 +75,22 @@ func New(path string) (*Store, error) {
 		}
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + linesSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlitestore: creating schema: %w", err)
+	}
+
+	migrated, err := migrateBlobs(db)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlitestore: migrating blobs: %w", err)
+	}
+	if migrated {
+		// Reclaim the space the whole blobs held.
+		if _, err := db.Exec(`VACUUM`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("sqlitestore: vacuum: %w", err)
+		}
 	}
 
 	return &Store{db: db}, nil
@@ -95,18 +107,25 @@ func (s *Store) PutBlob(hash string, data []byte) error {
 
 	// Content-addressed: present means identical, and blobs are never
 	// deleted (superseded revisions are retained history).
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO blobs (hash, data) VALUES (?, ?)`, hash, data)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := putBlob(tx, hash, data); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetBlob(hash string) ([]byte, error) {
-	var data []byte
-	err := s.db.QueryRow(`SELECT data FROM blobs WHERE hash = ?`, hash).Scan(&data)
-	if err == sql.ErrNoRows {
+	data, err := getBlob(s.db, hash)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("sqlitestore: no blob %s", hash)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sqlitestore: blob %s: %w", hash, err)
 	}
 
 	return data, nil
