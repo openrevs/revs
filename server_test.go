@@ -323,37 +323,6 @@ func TestSnapshotChunking(t *testing.T) {
 	}
 }
 
-func TestPublishOnUpload(t *testing.T) {
-	s, ts := newTestServer(t)
-	u := NewUser()
-
-	epoch := func() int {
-		var index serverIndex
-		require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &index))
-		return index.CurrentEpoch
-	}
-
-	// By default an accepted upload waits for the next cut.
-	resp := upload(t, ts, signedDoc(t, u, 1, "Alien"))
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, 0, epoch())
-
-	// With publish-on-upload, it is published before the response.
-	s.SetPublishOnUpload(true)
-	resp = upload(t, ts, signedDoc(t, u, 2, "Aliens"))
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, 1, epoch())
-
-	resp = upload(t, ts, signedDoc(t, u, 3, "Alien 3"))
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, 2, epoch())
-
-	// A rejected upload publishes nothing.
-	resp = upload(t, ts, signedDoc(t, u, 3, "Alien Resurrection"))
-	require.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Equal(t, 2, epoch())
-}
-
 func decodeVerdict(t *testing.T, resp *http.Response) uploadResponse {
 	t.Helper()
 
