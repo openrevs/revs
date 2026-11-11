@@ -353,18 +353,32 @@ func TestImportCSV(t *testing.T) {
 	_, msg = u.uploadTo("/import/csv", []byte(file))
 	require.Contains(t, msg, "Imported 0 new movies (4 already present) and 0 new viewings (3 already present)")
 
+	// imdb_id_no_tt supplies the id without "tt", alone or agreeing
+	// with imdb_id.
+	_, msg = u.uploadTo("/import/csv", []byte("title,imdb_id_no_tt,imdb_id\nThe Thing,0084787,\nHeat,0113277,tt0113277\n"))
+	require.Contains(t, msg, "Imported 1 new movies (1 already present)")
+	m, err = u.app.c.Movie(ctx, 4)
+	require.NoError(t, err)
+	require.Equal(t, "The Thing", m.Title)
+	require.Equal(t, "tt0084787", *m.ImdbID)
+	m, err = u.app.c.Movie(ctx, 3)
+	require.NoError(t, err)
+	require.Equal(t, "tt0113277", *m.ImdbID, "filled in on the existing movie")
+
 	// Title-only files work.
 	_, msg = u.uploadTo("/import/csv", []byte("title\nAlien\n"))
 	require.Contains(t, msg, "Imported 1 new movies")
 
 	// Bad files are rejected whole.
 	for file, want := range map[string]string{
-		"year,rating\n1994,5\n":                `must include a &#34;title&#34; column`,
-		"title,rating\nOk,3\nAliens,9\n":       "line 3: rating must be 0–5 stars",
-		"title,rating\nOk,3\nAliens,3.25\n":    "line 3: rating must be 0–5 stars, in steps of ½",
-		"title,view_date\nAliens,01/02/2020\n": `line 2: date &#34;01/02/2020&#34; should be YYYY-MM-DD`,
-		"title,year\n,1994\n":                  "line 2: title is required",
-		"title\n":                              "no rows after the header",
+		"year,rating\n1994,5\n":                                 `must include a &#34;title&#34; column`,
+		"title,rating\nOk,3\nAliens,9\n":                        "line 3: rating must be 0–5 stars",
+		"title,rating\nOk,3\nAliens,3.25\n":                     "line 3: rating must be 0–5 stars, in steps of ½",
+		"title,view_date\nAliens,01/02/2020\n":                  `line 2: date &#34;01/02/2020&#34; should be YYYY-MM-DD`,
+		"title,year\n,1994\n":                                   "line 2: title is required",
+		"title\n":                                               "no rows after the header",
+		"title,imdb_id,imdb_id_no_tt\nHeat,tt0113277,0113278\n": "line 2: imdb_id_no_tt &#34;0113278&#34; doesn&#39;t match imdb_id &#34;tt0113277&#34;",
+		"title,imdb_id_no_tt\nHeat,tt0113277\n":                 "line 2: imdb_id_no_tt &#34;tt0113277&#34; should be digits like 0110912",
 	} {
 		_, msg = u.uploadTo("/import/csv", []byte(file))
 		require.Contains(t, msg, "Could not read that CSV file", file)
@@ -372,7 +386,7 @@ func TestImportCSV(t *testing.T) {
 	}
 	counts, err := u.app.c.Counts(ctx)
 	require.NoError(t, err)
-	require.EqualValues(t, 4, counts.Movies, "a rejected file imports nothing")
+	require.EqualValues(t, 5, counts.Movies, "a rejected file imports nothing")
 }
 
 func (u *testUI) upload(data []byte) (string, string) {

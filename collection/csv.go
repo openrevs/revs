@@ -20,10 +20,11 @@ const (
 	csvRating   = "rating"
 	csvViewDate = "view_date"
 	csvIMDB     = "imdb_id"
+	csvIMDBNoTT = "imdb_id_no_tt" // "0110912": some exports drop the "tt"
 	csvTMDB     = "tmdb_id"
 )
 
-var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvTMDB}
+var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvIMDBNoTT, csvTMDB}
 
 // parseCSV reads a CSV file of movies. The first line is a header
 // naming the columns; only title is required. Each row is one movie,
@@ -79,9 +80,13 @@ func parseCSV(data []byte) ([]revs.Title2, error) {
 
 		mf := MovieFields{Title: get(csvTitle), Year: get(csvYear), IMDB: get(csvIMDB), TMDB: get(csvTMDB)}
 		in, merr := mf.Parse()
+		imdb, ierr := imdbNoTT(get(csvIMDBNoTT), in.IMDB)
+		if imdb != nil {
+			in.IMDB = imdb
+		}
 		vf := ViewingFields{Date: get(csvViewDate), Rating: get(csvRating)}
 		vin, verr := vf.Parse()
-		if err := errors.Join(merr, verr); err != nil {
+		if err := errors.Join(merr, ierr, verr); err != nil {
 			return nil, fmt.Errorf("line %d: %s", line, strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 
@@ -114,6 +119,24 @@ func parseCSV(data []byte) ([]revs.Title2, error) {
 		return nil, errors.New("no rows after the header")
 	}
 	return titles, nil
+}
+
+// imdbNoTT parses an imdb_id_no_tt value, an IMDb id without its "tt"
+// prefix ("0110912"). It must agree with imdb, the row's imdb_id, when
+// both are given.
+func imdbNoTT(s string, imdb *string) (*string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	id := normalizeIMDB("tt" + s)
+	if !digitsRe.MatchString(s) || id == nil {
+		return nil, fmt.Errorf("%s %q should be digits like 0110912", csvIMDBNoTT, s)
+	}
+	if imdb != nil && *imdb != *id {
+		return nil, fmt.Errorf("%s %q doesn't match %s %q", csvIMDBNoTT, s, csvIMDB, *imdb)
+	}
+	return id, nil
 }
 
 // ImportCSV merges a CSV file of movies into the collection (see
