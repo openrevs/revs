@@ -3,16 +3,15 @@
 // It is the model shared by the web UI (`revs ui`) and the terminal UI
 // (`revs tui`): both are front ends over a Collection.
 //
-// All local data — movies, viewings, settings including the signing
-// key, the author's version history, and the server list — lives in one
-// SQLite database in the data directory. Each server additionally gets
-// its own SQLite database holding the corpus pulled from it:
-//
-//	revs.db            the collection, settings, and servers
-//	servers/<id>.db    per-server pulled corpus, sync state, review index
+// All data — movies, viewings, settings including the signing key, the
+// server list, the author's version history, the corpora pulled from
+// servers with their sync state, and the index of their reviews — lives
+// in one SQLite database in the data directory, revs.db. The corpora
+// and history are sqlitestore's tables (one feed per server); the rest
+// are this package's (see migrations).
 //
 // Several processes may open the same data directory at once (say, the
-// web UI and the TUI): SQLite's locking keeps the databases consistent.
+// web UI and the TUI): SQLite's locking keeps the database consistent.
 package collection
 
 import (
@@ -30,6 +29,7 @@ import (
 	"time"
 
 	"github.com/openrevs/revs/client"
+	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/openrevs/revs/collection/localdb"
 	"github.com/openrevs/revs/keys"
 )
@@ -57,6 +57,7 @@ type Collection struct {
 	dataDir  string
 	db       *sql.DB
 	q        *localdb.Queries
+	corpus   *sqlitestore.DB
 	versions *client.History
 	http     *http.Client
 	wikidata *wikidata
@@ -94,6 +95,12 @@ func Open(opts Options) (*Collection, error) {
 		wdURL = DefaultWikidataURL
 	}
 
+	corpus, err := sqlitestore.New(db)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	watch, err := db.Conn(context.Background())
 	if err != nil {
 		db.Close()
@@ -104,7 +111,8 @@ func Open(opts Options) (*Collection, error) {
 		dataDir:  opts.DataDir,
 		db:       db,
 		q:        localdb.New(db),
-		versions: client.NewHistory(historyStore{db}),
+		corpus:   corpus,
+		versions: client.NewHistory(corpus),
 		http:     &http.Client{Timeout: 60 * time.Second},
 		wikidata: &wikidata{baseURL: wdURL, http: &http.Client{Timeout: 15 * time.Second}},
 		remotes:  map[int64]*remote{},
@@ -114,7 +122,6 @@ func Open(opts Options) (*Collection, error) {
 }
 
 func (c *Collection) Close() error {
-	c.closeRemotes()
 	c.watch.Close()
 	return c.db.Close()
 }

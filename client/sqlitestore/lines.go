@@ -12,8 +12,8 @@ import (
 )
 
 // Blobs are stored line-deduplicated. A blob is split on '\n' into
-// lines; each distinct line is stored once in the lines table, and a
-// blob is stored as the packed list of its line ids. Joining the lines
+// lines; each distinct line is stored once in corpus_lines, and a blob
+// is a corpus_docs row holding the packed list of its line ids. Joining the lines
 // with '\n' rebuilds the blob byte for byte, whatever it contains.
 //
 // sjsonl documents are canonical with one record per line, so a new
@@ -25,24 +25,12 @@ import (
 // few bytes per line, the pointers stay small next to the lines
 // themselves, which a (doc, pos, line) table would not.
 
-const linesSchema = `
-CREATE TABLE IF NOT EXISTS lines (
-	id INTEGER PRIMARY KEY,
-	hash BLOB NOT NULL UNIQUE,
-	data BLOB NOT NULL
-);
-CREATE TABLE IF NOT EXISTS docs (
-	hash TEXT PRIMARY KEY,
-	line_ids BLOB NOT NULL
-);
-`
-
 // putBlob stores data under hash, adding any lines not already stored.
 // A blob already present is left as is (content-addressed: present
 // means identical).
 func putBlob(tx *sql.Tx, hash string, data []byte) error {
 	var exists int
-	err := tx.QueryRow(`SELECT 1 FROM docs WHERE hash = ?`, hash).Scan(&exists)
+	err := tx.QueryRow(`SELECT 1 FROM corpus_docs WHERE hash = ?`, hash).Scan(&exists)
 	if err == nil {
 		return nil
 	}
@@ -50,12 +38,12 @@ func putBlob(tx *sql.Tx, hash string, data []byte) error {
 		return err
 	}
 
-	lookup, err := tx.Prepare(`SELECT id FROM lines WHERE hash = ?`)
+	lookup, err := tx.Prepare(`SELECT id FROM corpus_lines WHERE hash = ?`)
 	if err != nil {
 		return err
 	}
 	defer lookup.Close()
-	insert, err := tx.Prepare(`INSERT INTO lines (hash, data) VALUES (?, ?)`)
+	insert, err := tx.Prepare(`INSERT INTO corpus_lines (hash, data) VALUES (?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -84,7 +72,7 @@ func putBlob(tx *sql.Tx, hash string, data []byte) error {
 		ids = binary.AppendUvarint(ids, uint64(id))
 	}
 
-	_, err = tx.Exec(`INSERT INTO docs (hash, line_ids) VALUES (?, ?)`, hash, ids)
+	_, err = tx.Exec(`INSERT INTO corpus_docs (hash, line_ids) VALUES (?, ?)`, hash, ids)
 	return err
 }
 
@@ -97,7 +85,7 @@ func getBlob(db *sql.DB, hash string) ([]byte, error) {
 	defer tx.Rollback()
 
 	var packed []byte
-	if err := tx.QueryRow(`SELECT line_ids FROM docs WHERE hash = ?`, hash).Scan(&packed); err != nil {
+	if err := tx.QueryRow(`SELECT line_ids FROM corpus_docs WHERE hash = ?`, hash).Scan(&packed); err != nil {
 		return nil, err
 	}
 
@@ -122,7 +110,7 @@ func getBlob(db *sql.DB, hash string) ([]byte, error) {
 	}
 	list.WriteByte(']')
 
-	rows, err := tx.Query(`SELECT id, data FROM lines WHERE id IN (SELECT value FROM json_each(?))`, list.String())
+	rows, err := tx.Query(`SELECT id, data FROM corpus_lines WHERE id IN (SELECT value FROM json_each(?))`, list.String())
 	if err != nil {
 		return nil, err
 	}
@@ -179,54 +167,61 @@ func unpackIDs(packed []byte) ([]uint64, error) {
 	return ids, nil
 }
 
-// migrateBlobs moves blobs from the old whole-blob table into the line
-// store and drops it. It reports whether there was anything to migrate.
-func migrateBlobs(db *sql.DB) (bool, error) {
-	var name string
-	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs'`).Scan(&name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
+// deleteUnusedLines deletes the lines no document uses. Line lists are
+// packed, so this reads every document; it runs only when documents are
+// deleted, which is rare.
+func deleteUnusedLines(tx *sql.Tx) error {
+	used := map[uint64]bool{}
+	rows, err := tx.Query(`SELECT line_ids FROM corpus_docs`)
 	if err != nil {
-		return false, err
+		return err
 	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	rows, err := tx.Query(`SELECT hash, data FROM blobs`)
-	if err != nil {
-		return false, err
-	}
-	type blob struct {
-		hash string
-		data []byte
-	}
-	var blobs []blob
+	defer rows.Close()
 	for rows.Next() {
-		var b blob
-		if err := rows.Scan(&b.hash, &b.data); err != nil {
-			rows.Close()
-			return false, err
+		var packed []byte
+		if err := rows.Scan(&packed); err != nil {
+			return err
 		}
-		blobs = append(blobs, b)
+		ids, err := unpackIDs(packed)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			used[id] = true
+		}
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
-		return false, err
+		return err
 	}
 
-	for _, b := range blobs {
-		if err := putBlob(tx, b.hash, b.data); err != nil {
-			return false, fmt.Errorf("migrating blob %s: %w", b.hash, err)
+	rows, err = tx.Query(`SELECT id FROM corpus_lines`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var unused []uint64
+	for rows.Next() {
+		var id uint64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		if !used[id] {
+			unused = append(unused, id)
 		}
 	}
-	if _, err := tx.Exec(`DROP TABLE blobs`); err != nil {
-		return false, err
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
-	return true, tx.Commit()
+	stmt, err := tx.Prepare(`DELETE FROM corpus_lines WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range unused {
+		if _, err := stmt.Exec(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

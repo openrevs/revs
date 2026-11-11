@@ -15,9 +15,10 @@ import (
 
 // Blobs are rebuilt byte for byte, whatever their line structure.
 func TestBlobRoundTripExact(t *testing.T) {
-	store, err := sqlitestore.New(filepath.Join(t.TempDir(), "corpus.db"))
+	sdb, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	defer sdb.Close()
+	store := sdb.Feed("s")
 
 	cases := map[string][]byte{
 		"empty":            {},
@@ -46,9 +47,10 @@ func TestBlobRoundTripExact(t *testing.T) {
 // Successive revisions of a document share their unchanged lines.
 func TestBlobRevisionsShareLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "corpus.db")
-	store, err := sqlitestore.New(path)
+	sdb, err := sqlitestore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	defer sdb.Close()
+	store := sdb.Feed("s")
 
 	const titles = 1000
 	docs := map[string][]byte{}
@@ -79,7 +81,7 @@ func TestBlobRevisionsShareLines(t *testing.T) {
 	defer db.Close()
 
 	var lines int
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM lines`).Scan(&lines))
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM corpus_lines`).Scan(&lines))
 	// The titles, plus per revision a header, a signature, and an
 	// edited title (revision 1's edit replaces the original), plus the
 	// empty line after the trailing newline, shared by all.
@@ -89,69 +91,77 @@ func TestBlobRevisionsShareLines(t *testing.T) {
 	for _, d := range docs {
 		full += int64(len(d))
 	}
-	require.NoError(t, db.QueryRow(`SELECT (SELECT sum(length(data)) FROM lines) + (SELECT sum(length(line_ids)) FROM docs)`).Scan(&stored))
+	require.NoError(t, db.QueryRow(`SELECT (SELECT sum(length(data)) FROM corpus_lines) + (SELECT sum(length(line_ids)) FROM corpus_docs)`).Scan(&stored))
 	t.Logf("%d revisions: %d bytes as whole blobs, %d bytes line-deduplicated (%.1fx)",
 		revs, full, stored, float64(full)/float64(stored))
 	require.Less(t, stored*10, full)
 }
 
-// A database written with the old whole-blob table is migrated on open.
-func TestMigrateWholeBlobs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "corpus.db")
-
-	db, err := sql.Open("sqlite", "file:"+path)
-	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE blobs (hash TEXT PRIMARY KEY, data BLOB NOT NULL)`)
-	require.NoError(t, err)
-	old := map[string][]byte{
-		"aa": []byte("h1\nshared\nsig1\n"),
-		"bb": []byte("h2\nshared\nsig2\n"),
-		"cc": {},
-	}
-	for h, d := range old {
-		_, err = db.Exec(`INSERT INTO blobs (hash, data) VALUES (?, ?)`, h, d)
-		require.NoError(t, err)
-	}
-	require.NoError(t, db.Close())
-
-	store, err := sqlitestore.New(path)
-	require.NoError(t, err)
-	for h, want := range old {
-		got, err := store.GetBlob(h)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-	}
-	require.NoError(t, store.Close())
-
-	db, err = sql.Open("sqlite", "file:"+path)
-	require.NoError(t, err)
-	defer db.Close()
-	var n int
-	require.NoError(t, db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'blobs'`).Scan(&n))
-	require.Zero(t, n)
-
-	// Reopening a migrated file is a no-op.
-	store, err = sqlitestore.New(path)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-}
-
 // A missing line is reported, not silently rebuilt into a short blob.
 func TestMissingLineIsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "corpus.db")
-	store, err := sqlitestore.New(path)
+	sdb, err := sqlitestore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	defer sdb.Close()
+	store := sdb.Feed("s")
 	require.NoError(t, store.PutBlob("aa", []byte("one\ntwo")))
 
 	db, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`DELETE FROM lines WHERE data = CAST('two' AS BLOB)`)
+	_, err = db.Exec(`DELETE FROM corpus_lines WHERE data = CAST('two' AS BLOB)`)
 	require.NoError(t, err)
 
 	_, err = store.GetBlob("aa")
 	require.ErrorContains(t, err, "missing")
 }
 
-var _ client.Store = (*sqlitestore.Store)(nil)
+// Feeds keep separate sync state but share documents; deleting a feed
+// drops only what no other feed holds.
+func TestFeeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.db")
+	sdb, err := sqlitestore.Open(path)
+	require.NoError(t, err)
+	defer sdb.Close()
+	a, b := sdb.Feed("a"), sdb.Feed("b")
+
+	require.NoError(t, a.SaveState(&client.State{Epoch: 1, Heads: map[string]client.Head{"u": {Rev: 1, Hash: "aa"}}}))
+	st, err := b.LoadState()
+	require.NoError(t, err)
+	require.Nil(t, st)
+
+	shared := []byte("header\nshared line\nsig")
+	require.NoError(t, a.PutBlob("aa", shared))
+	require.NoError(t, b.PutBlob("aa", shared))
+	require.NoError(t, a.PutBlob("bb", []byte("header2\nshared line\nonly in a")))
+
+	db, err := sql.Open("sqlite", "file:"+path)
+	require.NoError(t, err)
+	defer db.Close()
+	count := func(table string) int {
+		var n int
+		require.NoError(t, db.QueryRow(`SELECT count(*) FROM `+table).Scan(&n))
+		return n
+	}
+	require.Equal(t, 2, count("corpus_docs"))
+	require.Equal(t, 5, count("corpus_lines"))
+
+	require.NoError(t, sdb.DeleteFeed("a"))
+
+	st, err = a.LoadState()
+	require.NoError(t, err)
+	require.Nil(t, st)
+
+	// b's document and its lines survive; a's own are gone.
+	got, err := b.GetBlob("aa")
+	require.NoError(t, err)
+	require.Equal(t, shared, got)
+	_, err = b.GetBlob("bb")
+	require.Error(t, err)
+	require.Equal(t, 1, count("corpus_docs"))
+	require.Equal(t, 3, count("corpus_lines"))
+
+	require.NoError(t, sdb.DeleteFeed("b"))
+	require.Equal(t, 0, count("corpus_docs"))
+	require.Equal(t, 0, count("corpus_lines"))
+}

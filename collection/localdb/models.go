@@ -4,17 +4,31 @@
 
 package localdb
 
-type History struct {
-	Userid     string
-	ForeignRev int64
+type IdxReview struct {
+	ID       int64
+	TitleID  int64
+	ViewedOn *string
+	Rating   *int64
+	Comment  string
 }
 
-type HistoryVersion struct {
-	Userid string
-	Seq    int64
-	Rev    int64
-	Hash   string
-	Data   []byte
+type IdxTitle struct {
+	ID         int64
+	ServerID   int64
+	Userid     string
+	Name       string
+	Year       *int64
+	ImdbID     *string
+	TmdbID     *string
+	WikidataID *string
+}
+
+type IdxUser struct {
+	ServerID   int64
+	Userid     string
+	Rev        int64
+	Hash       string
+	TitleCount int64
 }
 
 type Movie struct {

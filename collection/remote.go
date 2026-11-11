@@ -3,127 +3,83 @@ package collection
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
-	"github.com/openrevs/revs/client/sqlitestore"
-	"github.com/openrevs/revs/collection/remotedb"
+	"github.com/openrevs/revs/collection/localdb"
 	"github.com/tidwall/gjson"
 )
 
-// remote is everything held locally for one server, all in a single
-// SQLite file: the verified corpus and sync state (sqlitestore's
-// tables), plus a derived index of other users' reviews (remotedb).
+// remote is the client for one server. What is pulled from it is a
+// feed in the shared corpus (c.corpus), and its review index is the
+// idx_ rows for its server id, all in the collection's database.
 type remote struct {
-	path   string
-	store  *sqlitestore.Store
-	db     *sql.DB
-	q      *remotedb.Queries
+	id     int64
+	feed   string
 	client *client.Client
 }
 
-func (c *Collection) remotePath(serverID int64) string {
-	return filepath.Join(c.dataDir, "servers", strconv.FormatInt(serverID, 10)+".db")
+func feedName(serverID int64) string {
+	return strconv.FormatInt(serverID, 10)
 }
 
-// remote returns the open remote for a server, opening it on first use.
-func (c *Collection) remote(serverID int64, serverURL string) (*remote, error) {
+// remote returns the client for a server, creating it on first use.
+func (c *Collection) remote(serverID int64, serverURL string) *remote {
 	c.remotesMu.Lock()
 	defer c.remotesMu.Unlock()
 
 	if r, ok := c.remotes[serverID]; ok {
-		return r, nil
+		return r
 	}
 
-	path := c.remotePath(serverID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-
-	store, err := sqlitestore.New(path)
-	if err != nil {
-		return nil, err
-	}
-	db, err := openDB(path, remoteMigrations, "remotemigrations")
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
-
+	feed := feedName(serverID)
 	r := &remote{
-		path:   path,
-		store:  store,
-		db:     db,
-		q:      remotedb.New(db),
-		client: client.New(serverURL, store, client.WithHTTPClient(c.http), client.WithHistory(c.versions)),
+		id:     serverID,
+		feed:   feed,
+		client: client.New(serverURL, c.corpus.Feed(feed), client.WithHTTPClient(c.http), client.WithHistory(c.versions)),
 	}
 	c.remotes[serverID] = r
-	return r, nil
+	return r
 }
 
-// closeRemote closes a server's database and, if remove is set, deletes
-// its file (and WAL side files). The pulled corpus is a cache, so this
-// is how a server is reset or forgotten.
-func (c *Collection) closeRemote(serverID int64, remove bool) error {
+// forgetRemote discards everything pulled from a server: its feed in
+// the corpus (and the documents no other server holds), its sync state,
+// and its review index. The pulled corpus is a cache, so this is how a
+// server is reset or forgotten.
+func (c *Collection) forgetRemote(ctx context.Context, serverID int64) error {
 	c.remotesMu.Lock()
-	defer c.remotesMu.Unlock()
-
-	if r, ok := c.remotes[serverID]; ok {
-		r.db.Close()
-		r.store.Close()
-		delete(c.remotes, serverID)
-	}
-
-	if remove {
-		path := c.remotePath(serverID)
-		for _, p := range []string{path, path + "-wal", path + "-shm"} {
-			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (c *Collection) closeRemotes() {
-	c.remotesMu.Lock()
-	ids := make([]int64, 0, len(c.remotes))
-	for id := range c.remotes {
-		ids = append(ids, id)
-	}
+	delete(c.remotes, serverID)
 	c.remotesMu.Unlock()
 
-	for _, id := range ids {
-		c.closeRemote(id, false)
+	if err := c.q.DeleteIndexedServer(ctx, serverID); err != nil {
+		return err
 	}
+	return c.corpus.DeleteFeed(feedName(serverID))
 }
 
 // reindex rebuilds the review index for the given users from the
 // corpus; with all set, it rebuilds it for every user.
-func (r *remote) reindex(ctx context.Context, userIDs []string, all bool) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+func (c *Collection) reindex(ctx context.Context, r *remote, userIDs []string, all bool) error {
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	q := r.q.WithTx(tx)
+	q := c.q.WithTx(tx)
 
 	index := func(doc *client.Document) error {
-		if err := q.DeleteIndexedUser(ctx, doc.UserID); err != nil {
+		if err := q.DeleteIndexedUser(ctx, localdb.DeleteIndexedUserParams{ServerID: r.id, Userid: doc.UserID}); err != nil {
 			return err
 		}
-		return indexDocument(ctx, q, doc)
+		return indexDocument(ctx, q, r.id, doc)
 	}
 
 	if all {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM idx_users"); err != nil {
+		if err := q.DeleteIndexedServer(ctx, r.id); err != nil {
 			return err
 		}
 		for doc, err := range r.client.Documents() {
@@ -153,7 +109,7 @@ func (r *remote) reindex(ctx context.Context, userIDs []string, all bool) error 
 // Lines that don't parse as titles are skipped rather than failing the
 // whole index: other people's documents may use fields this client
 // doesn't know.
-func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Document) error {
+func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc *client.Document) error {
 	var titles []revs.Title2
 	lines := bytes.Split(doc.Data, []byte("\n"))
 	for _, line := range lines[min(1, len(lines)):] { // skip the control line
@@ -170,15 +126,15 @@ func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Documen
 		titles = append(titles, t)
 	}
 
-	err := q.InsertIndexedUser(ctx, remotedb.InsertIndexedUserParams{
-		Userid: doc.UserID, Rev: int64(doc.Rev), Hash: doc.Hash, TitleCount: int64(len(titles)),
+	err := q.InsertIndexedUser(ctx, localdb.InsertIndexedUserParams{
+		ServerID: serverID, Userid: doc.UserID, Rev: int64(doc.Rev), Hash: doc.Hash, TitleCount: int64(len(titles)),
 	})
 	if err != nil {
 		return err
 	}
 
 	for _, t := range titles {
-		p := remotedb.InsertIndexedTitleParams{Userid: doc.UserID, Name: t.Name}
+		p := localdb.InsertIndexedTitleParams{ServerID: serverID, Userid: doc.UserID, Name: t.Name}
 		if t.Year != nil {
 			y := int64(*t.Year)
 			p.Year = &y
@@ -198,7 +154,7 @@ func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Documen
 			return err
 		}
 		for _, rv := range t.Reviews {
-			rp := remotedb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date}
+			rp := localdb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date}
 			if rv.Rating != nil {
 				n := int64(*rv.Rating)
 				rp.Rating = &n
@@ -216,12 +172,12 @@ func indexDocument(ctx context.Context, q *remotedb.Queries, doc *client.Documen
 
 // pull syncs a server's corpus and refreshes the review index.
 func (c *Collection) pull(ctx context.Context, serverID int64, serverURL string, rebootstrap bool) (*client.Result, error) {
-	r, err := c.remote(serverID, serverURL)
-	if err != nil {
-		return nil, err
-	}
+	r := c.remote(serverID, serverURL)
 
-	var res *client.Result
+	var (
+		res *client.Result
+		err error
+	)
 	if rebootstrap {
 		res, err = r.client.Rebootstrap(ctx)
 	} else {
@@ -231,11 +187,11 @@ func (c *Collection) pull(ctx context.Context, serverID int64, serverURL string,
 		return nil, err
 	}
 
-	n, err := r.q.CountIndexedUsers(ctx)
+	n, err := c.q.CountIndexedUsers(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.reindex(ctx, res.Changed, res.Bootstrapped || n == 0); err != nil {
+	if err := c.reindex(ctx, r, res.Changed, res.Bootstrapped || n == 0); err != nil {
 		return nil, fmt.Errorf("indexing pulled documents: %w", err)
 	}
 

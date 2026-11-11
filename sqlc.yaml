@@ -53,12 +53,3 @@ sql:
             go_type:
               type: "int64"
               pointer: true
-  - engine: "sqlite"
-    schema: "./collection/remotemigrations"
-    queries: "./collection/remotequeries"
-    gen:
-      go:
-        package: "remotedb"
-        out: "collection/remotedb"
-        emit_pointers_for_null_types: true
-        overrides: *uioverrides
