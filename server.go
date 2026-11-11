@@ -124,6 +124,7 @@ func Start2(dataDir string, opts ServerOptions) {
 
 	server.startCutter(context.Background())
 
+	log.Printf("server listening on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))
 }
 

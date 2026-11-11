@@ -36,9 +36,16 @@ type uploadResponse struct {
 // uploadPost handles document uploads synchronously: verify, check rev
 // monotonicity, persist, and return a final verdict.
 func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
+	var userID string
+	var rev int
+	respond := func(status int, resp uploadResponse) {
+		logUpload(req, status, userID, rev, resp)
+		writeJSON(w, status, resp)
+	}
+
 	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxDocumentSize))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
+		respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
 		return
 	}
 
@@ -48,12 +55,12 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 	var latest *domain.Document
 	if ctl, isPatch, err := patchControl(body); isPatch {
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
+			respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
 			return
 		}
 		latest, err = s.dal.LatestDocument(req.Context(), ctl.userID)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+			respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 			return
 		}
 		if latest == nil || latest.Hash != ctl.Base {
@@ -61,24 +68,24 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 			if latest != nil {
 				resp.Rev, resp.Hash = latest.Rev, latest.Hash
 			}
-			writeJSON(w, http.StatusConflict, resp)
+			respond(http.StatusConflict, resp)
 			return
 		}
 
 		base, err := s.docs.Get(latest.Hash)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: fmt.Sprintf("loading base document: %v", err)})
+			respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: fmt.Sprintf("loading base document: %v", err)})
 			return
 		}
 		body, _, err = jsonlines.Patch(base, body)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: fmt.Sprintf("applying patch: %v", err)})
+			respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: fmt.Sprintf("applying patch: %v", err)})
 			return
 		}
 	}
 
 	if len(body) > maxDocumentSize {
-		writeJSON(w, http.StatusBadRequest, uploadResponse{
+		respond(http.StatusBadRequest, uploadResponse{
 			Status: "invalid",
 			Reason: fmt.Sprintf("document is %d bytes, exceeding the %d byte limit", len(body), maxDocumentSize),
 		})
@@ -87,25 +94,26 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 
 	user, doc, err := ParseRatingset(body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
+		respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
 		return
 	}
+	userID, rev = user.ID, user.Revision
 
 	if user.Revision < 1 {
-		writeJSON(w, http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: "revision must be at least 1"})
+		respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: "revision must be at least 1"})
 		return
 	}
 
 	if latest == nil {
 		latest, err = s.dal.LatestDocument(req.Context(), user.ID)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+			respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 			return
 		}
 	}
 
 	if latest != nil && user.Revision <= latest.Rev {
-		writeJSON(w, http.StatusConflict, uploadResponse{
+		respond(http.StatusConflict, uploadResponse{
 			Status: "stale",
 			Reason: "revision is not greater than the latest accepted revision",
 			Rev:    latest.Rev,
@@ -120,7 +128,7 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 	info := doc.Info()
 
 	if err := s.docs.Put(info.Hash, canonical); err != nil {
-		writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+		respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 		return
 	}
 
@@ -134,10 +142,10 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		// A concurrent upload of the same rev loses the (userid, rev)
 		// uniqueness race; report it as stale rather than a server error.
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			writeJSON(w, http.StatusConflict, uploadResponse{Status: "stale", Reason: "revision already accepted"})
+			respond(http.StatusConflict, uploadResponse{Status: "stale", Reason: "revision already accepted"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
+		respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 		return
 	}
 
@@ -149,7 +157,35 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, uploadResponse{Status: "accepted", Rev: user.Revision, Hash: info.Hash})
+	respond(http.StatusOK, uploadResponse{Status: "accepted", Rev: user.Revision, Hash: info.Hash})
+}
+
+// logUpload records the outcome of an upload: Info for accepted, Warn for
+// client-side rejections, Error for server failures.
+func logUpload(req *http.Request, status int, userID string, rev int, resp uploadResponse) {
+	level := slog.LevelInfo
+	switch {
+	case status >= 500:
+		level = slog.LevelError
+	case status >= 400:
+		level = slog.LevelWarn
+	}
+
+	attrs := []any{"status", resp.Status, "remote", req.RemoteAddr}
+	if userID != "" {
+		attrs = append(attrs, "user", userID, "rev", rev)
+	}
+	if resp.Hash != "" {
+		attrs = append(attrs, "hash", resp.Hash)
+	}
+	if resp.Reason != "" {
+		attrs = append(attrs, "reason", resp.Reason)
+	}
+	if resp.Status == "stale" && resp.Rev != 0 {
+		attrs = append(attrs, "latest_rev", resp.Rev)
+	}
+
+	slog.Log(req.Context(), level, "upload", attrs...)
 }
 
 // uploadPatch is what the upload handler needs from a patch's sjsonl
