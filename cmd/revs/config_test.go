@@ -132,3 +132,38 @@ func TestConfigFlag(t *testing.T) {
 		t.Errorf("listen = %q, want :8888 from --config file", c.Server.Listen)
 	}
 }
+
+func TestRevsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REVS_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("server:\n  listen: \":7070\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var c cli
+	parser, err := newParser(&c, defaultConfigPaths()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.Parse([]string{"server"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, "server"); c.Server.DataDir != want {
+		t.Errorf("server data dir = %q, want %q", c.Server.DataDir, want)
+	}
+	if c.Server.Listen != ":7070" {
+		t.Errorf("listen = %q, want :7070 from $REVS_HOME/config.yaml", c.Server.Listen)
+	}
+
+	c = cli{}
+	parser, err = newParser(&c, defaultConfigPaths()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parser.Parse([]string{"tui"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.TUI.DataDir != home {
+		t.Errorf("tui data dir = %q, want %q", c.TUI.DataDir, home)
+	}
+}

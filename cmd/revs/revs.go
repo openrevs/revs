@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -56,7 +57,7 @@ type cli struct {
 }
 
 type tuiCmd struct {
-	DataDir string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+	DataDir string `name:"data" help:"Data directory" default:"${revs_home}" type:"path"`
 }
 
 func (tuiCmd) Help() string {
@@ -66,7 +67,7 @@ func (tuiCmd) Help() string {
 }
 
 type uiCmd struct {
-	DataDir   string `name:"data" help:"Data directory" default:"~/.revs" type:"path"`
+	DataDir   string `name:"data" help:"Data directory" default:"${revs_home}" type:"path"`
 	Listen    string `help:"HTTP listen address" default:"${default_ui_listen}"`
 	NoBrowser bool   `help:"Don't open a web browser"`
 }
@@ -85,7 +86,7 @@ func (keygenCmd) Help() string {
 }
 
 type serverCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
 	Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
 	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
@@ -100,7 +101,7 @@ func (serverCmd) Help() string {
 }
 
 type clientCmd struct {
-	DataDir string `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	DataDir string `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
 	Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
 	Demo    bool   `help:"Insert demo data"`
 }
@@ -110,7 +111,7 @@ func (clientCmd) Help() string {
 }
 
 type clientServerCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"~/.revs/server" type:"path"`
+	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
 	ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
 	ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
 	Demo              bool          `help:"Insert demo data"`
@@ -193,9 +194,22 @@ var commandGroups = []kong.Group{
 	{Key: "dev", Title: "Development:"},
 }
 
+// revsHome is the root that data directories and the user config file
+// default to: $REVS_HOME if set, else ~/.revs. Pointing REVS_HOME at a
+// different directory gives a fully separate instance (identity, store,
+// servers and config), which is handy for testing as several users.
+func revsHome() string {
+	if home := os.Getenv("REVS_HOME"); home != "" {
+		return home
+	}
+	return "~/.revs"
+}
+
 // defaultConfigPaths are searched in order; values in later files
 // override earlier ones, and --config overrides them all.
-var defaultConfigPaths = []string{"~/.revs/config.yaml", "./revs.yaml"}
+func defaultConfigPaths() []string {
+	return []string{filepath.Join(revsHome(), "config.yaml"), "./revs.yaml"}
+}
 
 // newParser builds the CLI parser with config-file support layered in.
 // Precedence, lowest to highest: struct-tag defaults, config files (in
@@ -210,6 +224,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.UsageOnError(),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
+			"revs_home":                   revsHome(),
 			"default_server_listen":       revs.DefaultServerListen,
 			"default_client_listen":       revs.DefaultClientListen,
 			"default_ui_listen":           ui.DefaultListen,
@@ -221,7 +236,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 }
 
 func main() {
-	parser, err := newParser(&CLI, defaultConfigPaths...)
+	parser, err := newParser(&CLI, defaultConfigPaths()...)
 	if err != nil {
 		panic(err)
 	}
