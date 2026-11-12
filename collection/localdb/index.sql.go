@@ -3,40 +3,60 @@
 //   sqlc v1.30.0
 // source: index.sql
 
-package remotedb
+package localdb
 
 import (
 	"context"
 )
 
 const countIndexedUsers = `-- name: CountIndexedUsers :one
-SELECT COUNT(*) FROM idx_users
+SELECT COUNT(*) FROM idx_users WHERE server_id = ?
 `
 
-func (q *Queries) CountIndexedUsers(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countIndexedUsers)
+func (q *Queries) CountIndexedUsers(ctx context.Context, serverID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countIndexedUsers, serverID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
-const deleteIndexedUser = `-- name: DeleteIndexedUser :exec
-DELETE FROM idx_users WHERE userid = ?
+const deleteIndexedServer = `-- name: DeleteIndexedServer :exec
+DELETE FROM idx_users WHERE server_id = ?
 `
 
-func (q *Queries) DeleteIndexedUser(ctx context.Context, userid string) error {
-	_, err := q.db.ExecContext(ctx, deleteIndexedUser, userid)
+func (q *Queries) DeleteIndexedServer(ctx context.Context, serverID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteIndexedServer, serverID)
+	return err
+}
+
+const deleteIndexedUser = `-- name: DeleteIndexedUser :exec
+DELETE FROM idx_users WHERE server_id = ? AND userid = ?
+`
+
+type DeleteIndexedUserParams struct {
+	ServerID int64
+	Userid   string
+}
+
+func (q *Queries) DeleteIndexedUser(ctx context.Context, arg DeleteIndexedUserParams) error {
+	_, err := q.db.ExecContext(ctx, deleteIndexedUser, arg.ServerID, arg.Userid)
 	return err
 }
 
 const getIndexedUser = `-- name: GetIndexedUser :one
-SELECT userid, rev, hash, title_count FROM idx_users WHERE userid = ?
+SELECT server_id, userid, rev, hash, title_count FROM idx_users WHERE server_id = ? AND userid = ?
 `
 
-func (q *Queries) GetIndexedUser(ctx context.Context, userid string) (IdxUser, error) {
-	row := q.db.QueryRowContext(ctx, getIndexedUser, userid)
+type GetIndexedUserParams struct {
+	ServerID int64
+	Userid   string
+}
+
+func (q *Queries) GetIndexedUser(ctx context.Context, arg GetIndexedUserParams) (IdxUser, error) {
+	row := q.db.QueryRowContext(ctx, getIndexedUser, arg.ServerID, arg.Userid)
 	var i IdxUser
 	err := row.Scan(
+		&i.ServerID,
 		&i.Userid,
 		&i.Rev,
 		&i.Hash,
@@ -67,12 +87,13 @@ func (q *Queries) InsertIndexedReview(ctx context.Context, arg InsertIndexedRevi
 }
 
 const insertIndexedTitle = `-- name: InsertIndexedTitle :one
-INSERT INTO idx_titles (userid, name, year, imdb_id, tmdb_id, wikidata_id)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO idx_titles (server_id, userid, name, year, imdb_id, tmdb_id, wikidata_id)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
 type InsertIndexedTitleParams struct {
+	ServerID   int64
 	Userid     string
 	Name       string
 	Year       *int64
@@ -83,6 +104,7 @@ type InsertIndexedTitleParams struct {
 
 func (q *Queries) InsertIndexedTitle(ctx context.Context, arg InsertIndexedTitleParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, insertIndexedTitle,
+		arg.ServerID,
 		arg.Userid,
 		arg.Name,
 		arg.Year,
@@ -96,10 +118,11 @@ func (q *Queries) InsertIndexedTitle(ctx context.Context, arg InsertIndexedTitle
 }
 
 const insertIndexedUser = `-- name: InsertIndexedUser :exec
-INSERT INTO idx_users (userid, rev, hash, title_count) VALUES (?, ?, ?, ?)
+INSERT INTO idx_users (server_id, userid, rev, hash, title_count) VALUES (?, ?, ?, ?, ?)
 `
 
 type InsertIndexedUserParams struct {
+	ServerID   int64
 	Userid     string
 	Rev        int64
 	Hash       string
@@ -108,6 +131,7 @@ type InsertIndexedUserParams struct {
 
 func (q *Queries) InsertIndexedUser(ctx context.Context, arg InsertIndexedUserParams) error {
 	_, err := q.db.ExecContext(ctx, insertIndexedUser,
+		arg.ServerID,
 		arg.Userid,
 		arg.Rev,
 		arg.Hash,
@@ -117,11 +141,11 @@ func (q *Queries) InsertIndexedUser(ctx context.Context, arg InsertIndexedUserPa
 }
 
 const listIndexedUsers = `-- name: ListIndexedUsers :many
-SELECT userid, rev, hash, title_count FROM idx_users ORDER BY title_count DESC, userid
+SELECT server_id, userid, rev, hash, title_count FROM idx_users WHERE server_id = ? ORDER BY title_count DESC, userid
 `
 
-func (q *Queries) ListIndexedUsers(ctx context.Context) ([]IdxUser, error) {
-	rows, err := q.db.QueryContext(ctx, listIndexedUsers)
+func (q *Queries) ListIndexedUsers(ctx context.Context, serverID int64) ([]IdxUser, error) {
+	rows, err := q.db.QueryContext(ctx, listIndexedUsers, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +154,7 @@ func (q *Queries) ListIndexedUsers(ctx context.Context) ([]IdxUser, error) {
 	for rows.Next() {
 		var i IdxUser
 		if err := rows.Scan(
+			&i.ServerID,
 			&i.Userid,
 			&i.Rev,
 			&i.Hash,
@@ -153,9 +178,14 @@ SELECT t.id AS title_id, t.name, t.year, t.imdb_id, t.tmdb_id, t.wikidata_id,
        r.viewed_on, r.rating, r.comment
 FROM idx_titles t
 LEFT JOIN idx_reviews r ON r.title_id = t.id
-WHERE t.userid = ?
+WHERE t.server_id = ? AND t.userid = ?
 ORDER BY t.name COLLATE NOCASE, t.year, t.id, r.viewed_on IS NULL, r.viewed_on DESC
 `
+
+type ListUserReviewsParams struct {
+	ServerID int64
+	Userid   string
+}
 
 type ListUserReviewsRow struct {
 	TitleID    int64
@@ -169,8 +199,8 @@ type ListUserReviewsRow struct {
 	Comment    *string
 }
 
-func (q *Queries) ListUserReviews(ctx context.Context, userid string) ([]ListUserReviewsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUserReviews, userid)
+func (q *Queries) ListUserReviews(ctx context.Context, arg ListUserReviewsParams) ([]ListUserReviewsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserReviews, arg.ServerID, arg.Userid)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +233,7 @@ func (q *Queries) ListUserReviews(ctx context.Context, userid string) ([]ListUse
 }
 
 const matchingReviews = `-- name: MatchingReviews :many
-SELECT t.userid, t.name, t.year, r.viewed_on, r.rating, r.comment
+SELECT t.server_id, t.userid, t.name, t.year, r.viewed_on, r.rating, r.comment
 FROM idx_titles t
 JOIN idx_reviews r ON r.title_id = t.id
 WHERE t.userid != ?1
@@ -211,7 +241,7 @@ WHERE t.userid != ?1
     OR (CAST(?3 AS TEXT) IS NOT NULL AND t.imdb_id = CAST(?3 AS TEXT))
     OR (CAST(?4 AS TEXT) IS NOT NULL AND t.tmdb_id = CAST(?4 AS TEXT))
     OR (t.name = ?5 COLLATE NOCASE AND t.year IS ?6))
-ORDER BY r.viewed_on IS NULL, r.viewed_on DESC
+ORDER BY t.server_id, r.viewed_on IS NULL, r.viewed_on DESC
 `
 
 type MatchingReviewsParams struct {
@@ -224,6 +254,7 @@ type MatchingReviewsParams struct {
 }
 
 type MatchingReviewsRow struct {
+	ServerID int64
 	Userid   string
 	Name     string
 	Year     *int64
@@ -232,8 +263,8 @@ type MatchingReviewsRow struct {
 	Comment  string
 }
 
-// Other users' reviews of a title: matched by any shared external id,
-// or by exact title (case-insensitive) and year.
+// Other users' reviews of a title, from every server: matched by any
+// shared external id, or by exact title (case-insensitive) and year.
 func (q *Queries) MatchingReviews(ctx context.Context, arg MatchingReviewsParams) ([]MatchingReviewsRow, error) {
 	rows, err := q.db.QueryContext(ctx, matchingReviews,
 		arg.ExcludeUser,
@@ -251,6 +282,7 @@ func (q *Queries) MatchingReviews(ctx context.Context, arg MatchingReviewsParams
 	for rows.Next() {
 		var i MatchingReviewsRow
 		if err := rows.Scan(
+			&i.ServerID,
 			&i.Userid,
 			&i.Name,
 			&i.Year,

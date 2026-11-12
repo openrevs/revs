@@ -49,7 +49,7 @@ func NewServer(dataDir string) (*Server, error) {
 		return nil, err
 	}
 
-	docs, err := NewFileStore(filepath.Join(dataDir, "docs"))
+	docs, err := NewSQLiteStore(db.DB)
 	if err != nil {
 		return nil, err
 	}

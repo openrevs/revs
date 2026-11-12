@@ -15,11 +15,8 @@ import (
 //go:embed migrations/*.sql
 var localMigrations embed.FS
 
-//go:embed remotemigrations/*.sql
-var remoteMigrations embed.FS
-
 // gooseMu serializes migrations: goose keeps its base FS and dialect in
-// package globals, and remote databases are opened lazily from handlers.
+// package globals.
 var gooseMu sync.Mutex
 
 // openDB opens a SQLite database with foreign keys enforced, WAL

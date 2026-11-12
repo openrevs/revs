@@ -1,9 +1,11 @@
 package revs
 
 import (
-	"fmt"
+	"database/sql"
 	"os"
 	"path/filepath"
+
+	"github.com/openrevs/revs/client/sqlitestore"
 )
 
 // BlobStore is minimal content-addressed storage. Keys are sjsonl doc
@@ -13,61 +15,34 @@ type BlobStore interface {
 	Get(hash string) ([]byte, error)
 }
 
-// FileStore stores blobs on the local filesystem under
-// <root>/<hash[:2]>/<hash>.
-type FileStore struct {
-	root string
+// SQLiteStore keeps blobs line-deduplicated in the server's database,
+// using sqlitestore's tables as a single "server" feed. Successive
+// revisions of a ratings document share every unchanged line, and a
+// collection keeping its corpora in the same file shares storage too.
+type SQLiteStore struct {
+	feed *sqlitestore.Store
 }
 
-func NewFileStore(root string) (*FileStore, error) {
-	if err := os.MkdirAll(root, 0755); err != nil {
-		return nil, err
-	}
+// serverFeed is the sqlitestore feed holding the server's documents.
+// Being a feed keeps them from looking unreferenced to a client's
+// DeleteFeed should the database be shared.
+const serverFeed = "server"
 
-	return &FileStore{root: root}, nil
-}
-
-func (s *FileStore) path(hash string) (string, error) {
-	if len(hash) < 2 || !isHexString(hash) {
-		return "", fmt.Errorf("invalid blob hash %q", hash)
-	}
-
-	return filepath.Join(s.root, hash[:2], hash), nil
-}
-
-func (s *FileStore) Put(hash string, data []byte) error {
-	path, err := s.path(hash)
-	if err != nil {
-		return err
-	}
-
-	if _, err := os.Stat(path); err == nil {
-		return nil // content-addressed: already present means already identical
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-
-	return writeFileAtomic(path, data, 0644)
-}
-
-func (s *FileStore) Get(hash string) ([]byte, error) {
-	path, err := s.path(hash)
+func NewSQLiteStore(db *sql.DB) (*SQLiteStore, error) {
+	d, err := sqlitestore.New(db)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.ReadFile(path)
+	return &SQLiteStore{feed: d.Feed(serverFeed)}, nil
 }
 
-func isHexString(s string) bool {
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
-		}
-	}
-	return true
+func (s *SQLiteStore) Put(hash string, data []byte) error {
+	return s.feed.PutBlob(hash, data)
+}
+
+func (s *SQLiteStore) Get(hash string) ([]byte, error) {
+	return s.feed.GetBlob(hash)
 }
 
 // writeFileAtomic writes data to a temp file in the target directory and

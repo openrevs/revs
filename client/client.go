@@ -7,8 +7,8 @@
 // The package traffics in raw signed sjsonl documents and knows nothing
 // about their contents; domain parsing layers on top. Local state lives
 // behind the Store interface; the fsstore subpackage is the filesystem
-// implementation (stdlib only), and sqlitestore keeps the whole corpus
-// in a single SQLite database file. A Client is safe for concurrent
+// implementation (stdlib only), and sqlitestore keeps the corpora of
+// any number of servers in a single SQLite database. A Client is safe for concurrent
 // use, but a store must be owned by a single process.
 package client
 

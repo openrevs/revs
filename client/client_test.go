@@ -663,7 +663,7 @@ func historyStores(t *testing.T) map[string]func() client.HistoryStore {
 			return s
 		},
 		"sqlitestore": func() client.HistoryStore {
-			s, err := sqlitestore.New(path)
+			s, err := sqlitestore.Open(path)
 			require.NoError(t, err)
 			t.Cleanup(func() { s.Close() })
 			return s

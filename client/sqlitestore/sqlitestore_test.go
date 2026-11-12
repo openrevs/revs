@@ -17,9 +17,10 @@ import (
 )
 
 func TestStoreContract(t *testing.T) {
-	store, err := sqlitestore.New(filepath.Join(t.TempDir(), "corpus.db"))
+	db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	defer db.Close()
+	store := db.Feed("s")
 
 	// No state yet.
 	state, err := store.LoadState()
@@ -82,10 +83,10 @@ func TestClientRoundTrip(t *testing.T) {
 	content.WriteString(`{"name":"Alien"}` + "\n")
 
 	dbPath := filepath.Join(t.TempDir(), "corpus.db")
-	store, err := sqlitestore.New(dbPath)
+	db, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 
-	c := client.New(ts.URL, store)
+	c := client.New(ts.URL, db.Feed("s"))
 
 	pr, err := c.Push(ctx, key, content.Bytes())
 	require.NoError(t, err)
@@ -102,14 +103,14 @@ func TestClientRoundTrip(t *testing.T) {
 	doc, err := c.Document(uid)
 	require.NoError(t, err)
 	require.Contains(t, string(doc.Data), "Alien")
-	require.NoError(t, store.Close())
+	require.NoError(t, db.Close())
 
 	// Reopen the same file: state and corpus persisted.
-	store2, err := sqlitestore.New(dbPath)
+	db2, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	defer store2.Close()
+	defer db2.Close()
 
-	c2 := client.New(ts.URL, store2)
+	c2 := client.New(ts.URL, db2.Feed("s"))
 
 	epoch, err := c2.Epoch()
 	require.NoError(t, err)

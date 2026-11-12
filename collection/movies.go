@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/openrevs/revs/collection/localdb"
-	"github.com/openrevs/revs/collection/remotedb"
 )
 
 // Search timeouts: searchTimeout normally, and the shorter
@@ -162,46 +161,36 @@ func (c *Collection) Search(ctx context.Context, q string) ([]SearchResult, stri
 
 // ---- others' reviews ----
 
-// OtherReview is someone else's review of a movie, from a server.
+// OtherReview is someone else's review of a movie, from a server
+// (ServerID).
 type OtherReview struct {
-	remotedb.MatchingReviewsRow
-	ServerID int64
+	localdb.MatchingReviewsRow
 }
 
 // OthersReviews collects pulled reviews of m from every server, with
 // reviews seen on several servers listed once.
 func (c *Collection) OthersReviews(ctx context.Context, m localdb.Movie) ([]OtherReview, error) {
-	servers, err := c.q.ListServers(ctx)
+	rows, err := c.q.MatchingReviews(ctx, localdb.MatchingReviewsParams{
+		ExcludeUser: c.UserID(ctx),
+		WikidataID:  m.WikidataID,
+		ImdbID:      m.ImdbID,
+		TmdbID:      m.TmdbID,
+		Name:        m.Title,
+		Year:        m.Year,
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	var out []OtherReview
 	seen := map[string]bool{}
-	for _, s := range servers {
-		rem, err := c.remote(s.ID, s.Url)
-		if err != nil {
-			return out, err
+	for _, row := range rows {
+		k := fmt.Sprintf("%s|%s|%d|%s", row.Userid, Deref(row.ViewedOn), Deref(row.Rating), row.Comment)
+		if seen[k] {
+			continue
 		}
-		rows, err := rem.q.MatchingReviews(ctx, remotedb.MatchingReviewsParams{
-			ExcludeUser: c.UserID(ctx),
-			WikidataID:  m.WikidataID,
-			ImdbID:      m.ImdbID,
-			TmdbID:      m.TmdbID,
-			Name:        m.Title,
-			Year:        m.Year,
-		})
-		if err != nil {
-			return out, err
-		}
-		for _, row := range rows {
-			k := fmt.Sprintf("%s|%s|%d|%s", row.Userid, Deref(row.ViewedOn), Deref(row.Rating), row.Comment)
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			out = append(out, OtherReview{MatchingReviewsRow: row, ServerID: s.ID})
-		}
+		seen[k] = true
+		out = append(out, OtherReview{row})
 	}
 	return out, nil
 }

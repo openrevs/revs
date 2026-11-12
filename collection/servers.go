@@ -10,7 +10,6 @@ import (
 
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection/localdb"
-	"github.com/openrevs/revs/collection/remotedb"
 )
 
 var (
@@ -53,7 +52,7 @@ func (c *Collection) RemoveServer(ctx context.Context, id int64) error {
 		return err
 	}
 	return c.syncLocked(ctx, func() error {
-		if err := c.closeRemote(id, true); err != nil {
+		if err := c.forgetRemote(ctx, id); err != nil {
 			return err
 		}
 		return c.q.DeleteServer(ctx, id)
@@ -66,7 +65,7 @@ func (c *Collection) ResetServer(ctx context.Context, id int64) error {
 	if _, err := c.Server(ctx, id); err != nil {
 		return err
 	}
-	return c.syncLocked(ctx, func() error { return c.closeRemote(id, true) })
+	return c.syncLocked(ctx, func() error { return c.forgetRemote(ctx, id) })
 }
 
 // serverRemote loads a server and its remote.
@@ -75,16 +74,15 @@ func (c *Collection) serverRemote(ctx context.Context, id int64) (localdb.Server
 	if err != nil {
 		return s, nil, err
 	}
-	rem, err := c.remote(s.ID, s.Url)
-	return s, rem, err
+	return s, c.remote(s.ID, s.Url), nil
 }
 
 // ServerStatus is what is known locally about a server.
 type ServerStatus struct {
 	Server localdb.Server
-	Epoch  int                // last pulled epoch
-	Users  []remotedb.IdxUser // users in the pulled corpus
-	Mine   *remotedb.IdxUser  // the local user's published copy, if pulled
+	Epoch  int               // last pulled epoch
+	Users  []localdb.IdxUser // users in the pulled corpus
+	Mine   *localdb.IdxUser  // the local user's published copy, if pulled
 	MyID   string
 }
 
@@ -100,7 +98,7 @@ func (c *Collection) ServerStatus(ctx context.Context, id int64) (*ServerStatus,
 	if err != nil {
 		return nil, err
 	}
-	users, err := rem.q.ListIndexedUsers(ctx)
+	users, err := c.q.ListIndexedUsers(ctx, rem.id)
 	if err != nil {
 		return nil, err
 	}
@@ -236,20 +234,19 @@ type UserTitle struct {
 	Name                 string
 	Year                 *int64
 	IMDB, TMDB, Wikidata *string
-	Reviews              []remotedb.ListUserReviewsRow
+	Reviews              []localdb.ListUserReviewsRow
 }
 
 // ServerUser returns a user's pulled collection from a server.
-func (c *Collection) ServerUser(ctx context.Context, serverID int64, uid string) (remotedb.IdxUser, []*UserTitle, error) {
-	_, rem, err := c.serverRemote(ctx, serverID)
-	if err != nil {
-		return remotedb.IdxUser{}, nil, err
+func (c *Collection) ServerUser(ctx context.Context, serverID int64, uid string) (localdb.IdxUser, []*UserTitle, error) {
+	if _, err := c.Server(ctx, serverID); err != nil {
+		return localdb.IdxUser{}, nil, err
 	}
-	u, err := rem.q.GetIndexedUser(ctx, uid)
+	u, err := c.q.GetIndexedUser(ctx, localdb.GetIndexedUserParams{ServerID: serverID, Userid: uid})
 	if err != nil {
 		return u, nil, notFound(err)
 	}
-	rows, err := rem.q.ListUserReviews(ctx, uid)
+	rows, err := c.q.ListUserReviews(ctx, localdb.ListUserReviewsParams{ServerID: serverID, Userid: uid})
 	if err != nil {
 		return u, nil, err
 	}
