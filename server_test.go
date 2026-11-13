@@ -1,21 +1,23 @@
 package revs
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/domain"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,39 +90,75 @@ func fetch(t *testing.T, ts *httptest.Server, path string) []byte {
 	return data
 }
 
-// parseManifest verifies a manifest's signature and splits it into its
-// metadata line and per-user entries (manifest lines are unordered).
-func parseManifest(t *testing.T, manifest []byte, serverKey []byte) (gjson.Result, map[string]gjson.Result, string) {
-	t.Helper()
-
-	info, err := jsonlines.Verify(manifest)
-	require.NoError(t, err)
-	assert.Equal(t, serverKey, []byte(info.SignerKey))
-
-	var meta gjson.Result
-	entries := map[string]gjson.Result{}
-	for _, line := range strings.Split(strings.TrimSpace(string(manifest)), "\n")[1:] {
-		parsed := gjson.Parse(line)
-		if parsed.Get("epoch").Exists() {
-			meta = parsed
-			continue
-		}
-		entries[parsed.Get("id").String()] = parsed
-	}
-	require.True(t, meta.Exists(), "manifest metadata line not found")
-
-	return meta, entries, info.Hash
+type tarEntry struct {
+	name string
+	data []byte
 }
 
-func gunzip(t *testing.T, data []byte) []byte {
+// readPart fetches one archive part and checks the archive format:
+// gzipped ustar holding only regular files with plain names.
+func readPart(t *testing.T, ts *httptest.Server, path string) []tarEntry {
 	t.Helper()
 
-	gr, err := gzip.NewReader(bytes.NewReader(data))
+	gr, err := gzip.NewReader(bytes.NewReader(fetch(t, ts, path)))
 	require.NoError(t, err)
-	out, err := io.ReadAll(gr)
-	require.NoError(t, err)
+	tr := tar.NewReader(gr)
 
-	return out
+	var entries []tarEntry
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		require.Equal(t, tar.FormatUSTAR, hdr.Format, hdr.Name)
+		require.Equal(t, byte(tar.TypeReg), hdr.Typeflag, hdr.Name)
+		require.NotContains(t, hdr.Name, "/")
+		data, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		entries = append(entries, tarEntry{hdr.Name, data})
+	}
+
+	return entries
+}
+
+// readArtifact reads every part of an artifact into a name -> data map.
+func readArtifact(t *testing.T, ts *httptest.Server, channel, base string, parts int) map[string][]byte {
+	t.Helper()
+
+	all := map[string][]byte{}
+	for i := 1; i <= parts; i++ {
+		for _, e := range readPart(t, ts, fmt.Sprintf("/v1/%s/%s_%d.tar.gz", channel, base, i)) {
+			_, dup := all[e.name]
+			require.False(t, dup, "duplicate entry %s", e.name)
+			all[e.name] = e.data
+		}
+	}
+	return all
+}
+
+func readIndex(t *testing.T, ts *httptest.Server) publicationIndex {
+	t.Helper()
+
+	var idx publicationIndex
+	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
+	return idx
+}
+
+func patchRanges(ci *channelIndex) [][2]int {
+	var rs [][2]int
+	for _, p := range ci.Patches {
+		rs = append(rs, p.Range)
+	}
+	return rs
+}
+
+func titles(n int, prefix string) []string {
+	ts := make([]string, n)
+	for i := range ts {
+		ts[i] = fmt.Sprintf("%s %d", prefix, i)
+	}
+	return ts
 }
 
 func TestUploadVerdicts(t *testing.T) {
@@ -156,171 +194,210 @@ func TestPublishingRoundTrip(t *testing.T) {
 	s, ts := newTestServer(t)
 	ctx := context.Background()
 
-	var index serverIndex
-	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &index))
-	serverPub, err := keys.ParsePublic(index.ServerKey)
+	// Before any cut, every channel is listed, empty.
+	idx := readIndex(t, ts)
+	require.Contains(t, idx.Channels, ChannelMain)
+	require.Contains(t, idx.Channels, ChannelDirect)
+	assert.Equal(t, 0, idx.Channels[ChannelMain].Epoch)
+	assert.Empty(t, idx.Channels[ChannelMain].Patches)
+	assert.Empty(t, idx.Channels[ChannelMain].Snapshots)
+
+	u1, u2 := NewUser(), NewUser()
+	many := titles(40, "Movie")
+	doc1 := signedDoc(t, u1, 1, many...)
+	doc2 := signedDoc(t, u2, 1, "Alien")
+	require.Equal(t, http.StatusOK, upload(t, ts, doc1).StatusCode)
+	require.Equal(t, http.StatusOK, upload(t, ts, doc2).StatusCode)
+
+	cut, err := s.Cut(ctx)
 	require.NoError(t, err)
+	assert.Equal(t, map[string]int{ChannelMain: 1, ChannelDirect: 1}, cut)
 
-	u := NewUser()
-
-	// Give the base doc enough lines that a later diff is smaller than the
-	// full document.
-	// Large enough that a one-title patch (whose header carries full
-	// base/target hashes) is smaller than the full document.
-	titles := []string{
-		"Alien", "Blade Runner", "Casablanca", "Dune", "Eraserhead",
-		"Gattaca", "Heat", "Inception", "Jaws", "Klute",
-		"Laura", "Memento", "Network", "Oldboy", "Psycho",
-	}
-	doc1 := signedDoc(t, u, 1, titles...)
-	doc1Canonical, doc1Hash := canonical(t, doc1)
-
-	resp := upload(t, ts, doc1)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	epoch1, err := s.Cut(ctx)
+	// A tick with nothing new does nothing.
+	cut, err = s.Cut(ctx)
 	require.NoError(t, err)
-	require.Greater(t, epoch1, 0)
+	assert.Empty(t, cut)
 
-	// A cut with nothing new does nothing.
-	nothing, err := s.Cut(ctx)
+	idx = readIndex(t, ts)
+	main := idx.Channels[ChannelMain]
+	assert.Equal(t, 1, main.Epoch)
+	assert.Equal(t, [][2]int{{0, 1}}, patchRanges(main))
+	require.Len(t, main.Snapshots, 1)
+	assert.Equal(t, 1, main.Snapshots[0].Epoch)
+
+	// The first patch carries full documents for users new to the
+	// channel, exactly as the server stores them.
+	canon1, _ := canonical(t, doc1)
+	canon2, _ := canonical(t, doc2)
+	patch := readArtifact(t, ts, ChannelMain, "patch-0-1", 1)
+	assert.Equal(t, map[string][]byte{
+		u1.ID + "-1.sjsonl": canon1,
+		u2.ID + "-1.sjsonl": canon2,
+	}, patch)
+
+	// A small change to a big document ships as an sjsonl patch from the
+	// rev the channel held to the new one.
+	many[7] = "Changed"
+	doc1b := signedDoc(t, u1, 2, many...)
+	require.Equal(t, http.StatusOK, upload(t, ts, doc1b).StatusCode)
+	cut, err = s.Cut(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 0, nothing)
+	assert.Equal(t, 2, cut[ChannelMain])
 
-	// The patch manifest verifies against the server key and lists our
-	// user; the first appearance ships the full doc.
-	manifest1 := fetch(t, ts, fmt.Sprintf("/v1/epochs/%d/manifest", epoch1))
-	meta1, entries1, manifest1Hash := parseManifest(t, manifest1, serverPub)
-	assert.Equal(t, int64(epoch1), meta1.Get("epoch").Int())
-	assert.Equal(t, "patch", meta1.Get("kind").String())
-	entry := entries1[u.ID]
-	require.True(t, entry.Exists())
-	assert.Equal(t, int64(1), entry.Get("rev").Int())
-	assert.Equal(t, doc1Hash, entry.Get("hash").String())
-
-	stream := gunzip(t, fetch(t, ts, fmt.Sprintf("/v1/epochs/%d/patch", epoch1)))
-	off, size := int(entry.Get("offset").Int()), int(entry.Get("size").Int())
-	require.LessOrEqual(t, off+size, len(stream))
-	extracted := stream[off : off+size]
-	assert.Equal(t, doc1Canonical, extracted)
-
-	// Second upload: same titles plus one, higher rev. The published entry
-	// should now be an sjsonl patch that applies onto doc1.
-	doc2 := signedDoc(t, u, 2, append(titles, "Fargo")...)
-	doc2Canonical, doc2Hash := canonical(t, doc2)
-
-	resp = upload(t, ts, doc2)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	epoch2, err := s.Cut(ctx)
+	patch = readArtifact(t, ts, ChannelMain, "patch-1-2", 1)
+	require.Len(t, patch, 1)
+	entry := patch[u1.ID+"-1-2.sjsonl"]
+	require.NotNil(t, entry)
+	assert.Equal(t, "patch", gjson.GetBytes(bytes.SplitN(entry, []byte("\n"), 2)[0], "sjsonl").String())
+	applied, _, err := jsonlines.Patch(canon1, entry)
 	require.NoError(t, err)
-	assert.Equal(t, epoch1+1, epoch2)
+	canon1b, _ := canonical(t, doc1b)
+	assert.Equal(t, canon1b, applied)
 
-	manifest2 := fetch(t, ts, fmt.Sprintf("/v1/epochs/%d/manifest", epoch2))
-	meta2, entries2, _ := parseManifest(t, manifest2, serverPub)
-	assert.Equal(t, manifest1Hash, meta2.Get("prev").String(), "manifests must chain")
+	// The snapshot at epoch 2 holds every user's full document.
+	snap := readArtifact(t, ts, ChannelMain, "snapshot-2", 1)
+	assert.Equal(t, map[string][]byte{
+		u1.ID + "-2.sjsonl": canon1b,
+		u2.ID + "-1.sjsonl": canon2,
+	}, snap)
 
-	entry2 := entries2[u.ID]
-	require.True(t, entry2.Exists())
-	assert.Equal(t, doc2Hash, entry2.Get("hash").String())
-
-	stream2 := gunzip(t, fetch(t, ts, fmt.Sprintf("/v1/epochs/%d/patch", epoch2)))
-	off2, size2 := int(entry2.Get("offset").Int()), int(entry2.Get("size").Int())
-	patchEntry := stream2[off2 : off2+size2]
-	assert.Equal(t, "patch", gjson.GetBytes(patchEntry, "sjsonl").String(), "expected a patch entry, got a full doc")
-	assert.Equal(t, doc1Hash, gjson.GetBytes(patchEntry, "base").String())
-
-	patched, patchedInfo, err := jsonlines.Patch(doc1Canonical, patchEntry)
+	// Index timestamps are RFC 3339.
+	idx = readIndex(t, ts)
+	_, err = time.Parse(time.RFC3339, idx.Created)
 	require.NoError(t, err)
-	assert.Equal(t, doc2Canonical, patched)
-	assert.Equal(t, doc2Hash, patchedInfo.Hash)
-
-	// Snapshot (cadence = every epoch in tests): individually gzipped
-	// members packed into chunk files, addressed by global manifest
-	// offsets. At the default chunk target this corpus is one chunk.
-	snapManifest := fetch(t, ts, fmt.Sprintf("/v1/snapshots/%d/manifest", epoch2))
-	snapMeta, snapEntries, _ := parseManifest(t, snapManifest, serverPub)
-	assert.Equal(t, "snapshot", snapMeta.Get("kind").String())
-	assert.Equal(t, int64(epoch2), snapMeta.Get("epoch").Int())
-
-	chunks := snapMeta.Get("chunks").Array()
-	require.Len(t, chunks, 1)
-
-	snapshot := fetch(t, ts, fmt.Sprintf("/v1/snapshots/%d/snapshot.0", epoch2))
-	require.Equal(t, int(chunks[0].Get("size").Int()), len(snapshot))
-	sum := sha256.Sum256(snapshot)
-	assert.Equal(t, chunks[0].Get("hash").String(), hex.EncodeToString(sum[:]))
-
-	snapEntry := snapEntries[u.ID]
-	require.True(t, snapEntry.Exists())
-	soff, ssize := int(snapEntry.Get("offset").Int()), int(snapEntry.Get("size").Int())
-	require.LessOrEqual(t, soff+ssize, len(snapshot))
-	member := gunzip(t, snapshot[soff:soff+ssize])
-	assert.Equal(t, doc2Canonical, member)
-
-	// Each chunk file is itself a valid gzip stream.
-	whole := gunzip(t, snapshot)
-	assert.Contains(t, string(whole), "Fargo")
-
-	// The index advertises the state of the world.
-	var idx serverIndex
-	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
-	assert.Equal(t, epoch2, idx.CurrentEpoch)
-	assert.Contains(t, idx.SnapshotEpochs, epoch1)
-	assert.Contains(t, idx.SnapshotEpochs, epoch2)
-	assert.Equal(t, index.ServerKey, idx.ServerKey)
+	_, err = time.Parse(time.RFC3339, idx.Channels[ChannelMain].Patches[0].Created)
+	require.NoError(t, err)
 }
 
-// TestSnapshotChunking forces a tiny chunk target so every member gets
-// a chunk file to itself, and checks that the chunk table, per-chunk
-// hashes, and global offsets agree with the stored files.
-func TestSnapshotChunking(t *testing.T) {
+func TestMultiPartArchives(t *testing.T) {
 	s, ts := newTestServer(t)
-	s.snapshotChunkSize = 1 // every member overflows the target
+	s.partSize = 1 // every entry overflows the target: one entry per part
 	ctx := context.Background()
 
 	users := []User{NewUser(), NewUser(), NewUser()}
 	for i, u := range users {
-		resp := upload(t, ts, signedDoc(t, u, 1, fmt.Sprintf("Movie %d", i)))
-		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u, 1, fmt.Sprintf("Movie %d", i))).StatusCode)
 	}
-
-	epoch, err := s.Cut(ctx)
+	_, err := s.Cut(ctx)
 	require.NoError(t, err)
 
-	var idx serverIndex
-	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
-	serverPub, err := keys.ParsePublic(idx.ServerKey)
-	require.NoError(t, err)
+	main := readIndex(t, ts).Channels[ChannelMain]
+	require.Len(t, main.Snapshots, 1)
+	require.Equal(t, 3, main.Snapshots[0].Parts)
+	require.Equal(t, 3, main.Patches[0].Parts)
 
-	manifest := fetch(t, ts, fmt.Sprintf("/v1/snapshots/%d/manifest", epoch))
-	meta, entries, _ := parseManifest(t, manifest, serverPub)
-
-	chunks := meta.Get("chunks").Array()
-	require.Len(t, chunks, len(users))
-	require.Len(t, entries, len(users))
-
-	// Reassemble the logical stream chunk by chunk, verifying each file
-	// against its table row.
-	var stream []byte
-	for i, c := range chunks {
-		data := fetch(t, ts, fmt.Sprintf("/v1/snapshots/%d/snapshot.%d", epoch, i))
-		require.Equal(t, int(c.Get("size").Int()), len(data))
-		sum := sha256.Sum256(data)
-		require.Equal(t, c.Get("hash").String(), hex.EncodeToString(sum[:]))
-		stream = append(stream, data...)
+	for i := 1; i <= 3; i++ {
+		require.Len(t, readPart(t, ts, fmt.Sprintf("/v1/main/snapshot-1_%d.tar.gz", i)), 1)
 	}
-
-	// Global offsets slice members out of the reassembled stream, and
-	// each member decompresses to its user's document.
+	snap := readArtifact(t, ts, ChannelMain, "snapshot-1", 3)
 	for _, u := range users {
-		e := entries[u.ID]
-		require.True(t, e.Exists())
-		off, size := int(e.Get("offset").Int()), int(e.Get("size").Int())
-		require.LessOrEqual(t, off+size, len(stream))
-		member := gunzip(t, stream[off:off+size])
-		assert.Contains(t, string(member), u.ID)
+		require.Contains(t, snap, u.ID+"-1.sjsonl")
 	}
+}
+
+func TestPatchCompaction(t *testing.T) {
+	s, ts := newTestServer(t)
+	s.snapshotEvery = 0 // only the epoch-1 snapshot
+	s.compactEvery = []int{2, 4}
+	ctx := context.Background()
+
+	u1, u2 := NewUser(), NewUser()
+	many := titles(40, "Movie")
+	docs := map[int][]byte{}
+	for rev := 1; rev <= 4; rev++ {
+		many[0] = fmt.Sprintf("Rev %d", rev)
+		docs[rev] = signedDoc(t, u1, rev, many...)
+		require.Equal(t, http.StatusOK, upload(t, ts, docs[rev]).StatusCode)
+		if rev == 2 {
+			require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u2, 1, "Alien")).StatusCode)
+		}
+		cut, err := s.Cut(ctx)
+		require.NoError(t, err)
+		require.Equal(t, rev, cut[ChannelMain])
+	}
+
+	main := readIndex(t, ts).Channels[ChannelMain]
+	assert.Equal(t, [][2]int{{0, 1}, {1, 2}, {0, 2}, {2, 3}, {3, 4}, {2, 4}, {0, 4}}, patchRanges(main))
+
+	// A compacted patch spans its range: intermediate revs are never
+	// published, and users new to the channel in the range get full
+	// documents.
+	patch := readArtifact(t, ts, ChannelMain, "patch-2-4", 1)
+	require.Len(t, patch, 1)
+	entry := patch[u1.ID+"-2-4.sjsonl"]
+	require.NotNil(t, entry)
+	base, _ := canonical(t, docs[2])
+	applied, _, err := jsonlines.Patch(base, entry)
+	require.NoError(t, err)
+	want, _ := canonical(t, docs[4])
+	assert.Equal(t, want, applied)
+
+	patch = readArtifact(t, ts, ChannelMain, "patch-0-4", 1)
+	assert.Len(t, patch, 2)
+	assert.Contains(t, patch, u1.ID+"-4.sjsonl")
+	assert.Contains(t, patch, u2.ID+"-1.sjsonl")
+}
+
+func TestChannelRemoval(t *testing.T) {
+	s, ts := newTestServer(t)
+	ctx := context.Background()
+
+	// A channel that leaves out users that fail vetting.
+	rejected := map[string]bool{}
+	require.NoError(t, s.AddChannel("vetted", func(d *domain.Document) bool { return !rejected[d.Userid] }))
+
+	u1, u2 := NewUser(), NewUser()
+	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u1, 1, "Alien")).StatusCode)
+	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u2, 1, "Heat")).StatusCode)
+	cut, err := s.Cut(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, cut["vetted"])
+
+	rejected[u2.ID] = true
+	cut, err = s.Cut(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"vetted": 2}, cut)
+
+	patch := readArtifact(t, ts, "vetted", "patch-1-2", 1)
+	require.Equal(t, []string{removedFile}, slices.Collect(maps.Keys(patch)))
+	var removed []string
+	require.NoError(t, json.Unmarshal(patch[removedFile], &removed))
+	assert.Equal(t, []string{u2.ID}, removed)
+
+	snap := readArtifact(t, ts, "vetted", "snapshot-2", 1)
+	assert.Equal(t, []string{u1.ID + "-1.sjsonl"}, slices.Collect(maps.Keys(snap)))
+
+	// Re-admitted within a compacted range, the user is an ordinary entry.
+	delete(rejected, u2.ID)
+	cut, err = s.Cut(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, cut["vetted"])
+	patch = readArtifact(t, ts, "vetted", "patch-2-3", 1)
+	assert.Equal(t, []string{u2.ID + "-1.sjsonl"}, slices.Collect(maps.Keys(patch)))
+}
+
+func TestDirectChannel(t *testing.T) {
+	s, ts := newTestServer(t)
+	ctx := context.Background()
+
+	direct := NewUser()
+	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, direct, 1, "Alien")).StatusCode)
+
+	// A document that arrived from another server.
+	relayed := NewUser()
+	canon, hash := canonical(t, signedDoc(t, relayed, 1, "Heat"))
+	require.NoError(t, s.docs.Put(hash, canon))
+	require.NoError(t, s.dal.AddDocument(ctx, &domain.Document{
+		Userid: relayed.ID, Rev: 1, Hash: hash, Size: len(canon), ReceivedTime: time.Now(),
+	}))
+
+	_, err := s.Cut(ctx)
+	require.NoError(t, err)
+
+	main := readArtifact(t, ts, ChannelMain, "snapshot-1", 1)
+	assert.Len(t, main, 2)
+	only := readArtifact(t, ts, ChannelDirect, "snapshot-1", 1)
+	assert.Equal(t, []string{direct.ID + "-1.sjsonl"}, slices.Collect(maps.Keys(only)))
 }
 
 func decodeVerdict(t *testing.T, resp *http.Response) uploadResponse {

@@ -86,18 +86,20 @@ func (keygenCmd) Help() string {
 }
 
 type serverCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
-	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	DataDir       string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
+	Listen        string        `help:"HTTP listen address" default:"${default_server_listen}"`
+	CutInterval   time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
+	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
 }
 
 func (serverCmd) Help() string {
 	return "Accepts signed ratings documents and periodically publishes them as an " +
-		"epoch, with a full snapshot every --snapshot-every epochs. The data " +
-		"directory holds the server's identity key, its document store and the " +
-		"published tree; back it up to keep the server's identity."
+		"epoch on each of its channels, with a full snapshot every " +
+		"--snapshot-every epochs and patches compacted at the --compact-every " +
+		"boundaries. The data directory holds the document store and the " +
+		"published tree."
 }
 
 type clientCmd struct {
@@ -111,13 +113,14 @@ func (clientCmd) Help() string {
 }
 
 type clientServerCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
-	ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
-	Demo              bool          `help:"Insert demo data"`
-	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	DataDir       string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
+	ServerListen  string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
+	ClientListen  string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
+	Demo          bool          `help:"Insert demo data"`
+	CutInterval   time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
+	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
 }
 
 func (clientServerCmd) Help() string {
@@ -224,13 +227,14 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.UsageOnError(),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
-			"revs_home":                   revsHome(),
-			"default_server_listen":       revs.DefaultServerListen,
-			"default_client_listen":       revs.DefaultClientListen,
-			"default_ui_listen":           ui.DefaultListen,
-			"default_cut_interval":        revs.DefaultCutInterval.String(),
-			"default_snapshot_every":      strconv.Itoa(revs.DefaultSnapshotEvery),
-			"default_snapshot_chunk_size": strconv.Itoa(revs.DefaultSnapshotChunkSize),
+			"revs_home":              revsHome(),
+			"default_server_listen":  revs.DefaultServerListen,
+			"default_client_listen":  revs.DefaultClientListen,
+			"default_ui_listen":      ui.DefaultListen,
+			"default_cut_interval":   revs.DefaultCutInterval.String(),
+			"default_snapshot_every": strconv.Itoa(revs.DefaultSnapshotEvery),
+			"default_part_size":      strconv.Itoa(revs.DefaultPartSize),
+			"default_compact_every":  joinInts(revs.DefaultCompactEvery),
 		},
 	)
 }
@@ -251,10 +255,11 @@ func main() {
 	case "server":
 		ensureDir(CLI.Server.DataDir)
 		revs.Start2(CLI.Server.DataDir, revs.ServerOptions{
-			Listen:            CLI.Server.Listen,
-			CutInterval:       CLI.Server.CutInterval,
-			SnapshotEvery:     CLI.Server.SnapshotEvery,
-			SnapshotChunkSize: CLI.Server.SnapshotChunkSize,
+			Listen:        CLI.Server.Listen,
+			CutInterval:   CLI.Server.CutInterval,
+			SnapshotEvery: CLI.Server.SnapshotEvery,
+			PartSize:      CLI.Server.PartSize,
+			CompactEvery:  nonNil(CLI.Server.CompactEvery),
 		})
 	case "client":
 		ensureDir(CLI.Client.DataDir)
@@ -262,10 +267,11 @@ func main() {
 	case "clientserver":
 		ensureDir(CLI.ClientServer.DataDir)
 		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
-			Listen:            CLI.ClientServer.ServerListen,
-			CutInterval:       CLI.ClientServer.CutInterval,
-			SnapshotEvery:     CLI.ClientServer.SnapshotEvery,
-			SnapshotChunkSize: CLI.ClientServer.SnapshotChunkSize,
+			Listen:        CLI.ClientServer.ServerListen,
+			CutInterval:   CLI.ClientServer.CutInterval,
+			SnapshotEvery: CLI.ClientServer.SnapshotEvery,
+			PartSize:      CLI.ClientServer.PartSize,
+			CompactEvery:  nonNil(CLI.ClientServer.CompactEvery),
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
@@ -440,4 +446,21 @@ func addNewMovie() error {
 	fmt.Printf("--- m dump:\n%s\n\n", string(d))
 
 	return nil
+}
+
+func joinInts(ns []int) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// nonNil turns a nil slice (an empty flag value) into an empty one, so
+// that an explicitly empty --compact-every disables compaction.
+func nonNil(ns []int) []int {
+	if ns == nil {
+		return []int{}
+	}
+	return ns
 }

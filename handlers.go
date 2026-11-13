@@ -138,6 +138,7 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		Hash:         info.Hash,
 		Size:         len(canonical),
 		ReceivedTime: util.Now(),
+		Direct:       true,
 	}); err != nil {
 		// A concurrent upload of the same rev loses the (userid, rev)
 		// uniqueness race; report it as stale rather than a server error.

@@ -16,14 +16,8 @@
 {{end}}
 {{if .Diverged}}
 <div class="flash flash-error">
-  <p><strong>Your copy of this server's data no longer matches what it publishes.</strong> This can mean local corruption or that the server rewrote its history.</p>
+  <p><strong>Your copy of this server's data no longer matches what it publishes.</strong> No published update applies to it, which can mean local corruption or that the server rewrote its history.</p>
   <form method="post" action="/servers/{{.Server.ID}}/rebootstrap"><button type="submit">Re-download from a snapshot</button></form>
-</div>
-{{end}}
-{{if .KeyChange}}
-<div class="flash flash-error">
-  <p><strong>The server is signing with a different key than the one pinned on first contact.</strong> Either the server's identity changed or something is intercepting it. Only continue if you trust the change.</p>
-  <form method="post" action="/servers/{{.Server.ID}}/reset" onsubmit="return confirm('Forget this server\'s data and trust its new key?')"><button type="submit" class="danger">Forget pulled data and re-pin</button></form>
 </div>
 {{end}}
 
@@ -63,7 +57,7 @@
 <section class="danger">
   <h2>Maintenance</h2>
   <div class="actions">
-    <form method="post" action="/servers/{{.Server.ID}}/reset" onsubmit="return confirm('Discard everything pulled from this server, including its pinned key?')"><button type="submit">Discard pulled data</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/reset" onsubmit="return confirm('Discard everything pulled from this server?')"><button type="submit">Discard pulled data</button></form>
     <form method="post" action="/servers/{{.Server.ID}}/delete" onsubmit="return confirm('Remove this server? Your published reviews stay on it.')"><button type="submit" class="danger">Remove server</button></form>
   </div>
 </section>

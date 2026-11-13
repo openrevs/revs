@@ -32,21 +32,27 @@ type Document struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
+	// Direct reports that the document was uploaded to this server
+	// directly, rather than arriving from another server.
+	Direct bool
 }
 
-// Epoch is a row in the cut ledger. Kind is "patch" for epoch-advancing
-// cuts and "snapshot" for corpus materializations at an existing epoch.
-type Epoch struct {
-	Epoch        int
-	Kind         string
-	ManifestHash string
-	Created      time.Time
+// Artifact is a published snapshot or patch of a channel. A snapshot
+// has Start == End, the epoch it materializes.
+type Artifact struct {
+	Channel string
+	Kind    string
+	Start   int
+	End     int
+	Parts   int
+	Created time.Time
 }
 
-// PublishedHead records the rev of a user's document as of the last cut.
-type PublishedHead struct {
+// ChannelChange records that, from Epoch on, a channel holds rev Rev of
+// a user's document, or none if Rev is nil (the user was removed).
+type ChannelChange struct {
 	Userid string
-	Rev    int
+	Rev    *int
 }
 
 type Title struct {

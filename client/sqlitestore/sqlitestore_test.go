@@ -29,11 +29,10 @@ func TestStoreContract(t *testing.T) {
 
 	// Full round trip, including push state.
 	saved := &client.State{
-		Epoch:        7,
-		ManifestHash: "abcd",
-		ServerKey:    "eeee",
-		Heads:        map[string]client.Head{"u1": {Rev: 3, Hash: "ffff"}},
-		Push:         map[string]client.PushState{"u1": {Rev: 3, Hash: "ffff", ServerRev: 4}},
+		Epoch:   7,
+		Channel: "main",
+		Heads:   map[string]client.Head{"u1": {Rev: 3, Hash: "ffff"}},
+		Push:    map[string]client.PushState{"u1": {Rev: 3, Hash: "ffff", ServerRev: 4}},
 	}
 	require.NoError(t, store.SaveState(saved))
 

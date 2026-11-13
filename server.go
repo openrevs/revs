@@ -2,12 +2,12 @@ package revs
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,25 +20,32 @@ const (
 	DefaultCutInterval   = time.Hour
 	DefaultSnapshotEvery = 100
 
-	// DefaultSnapshotChunkSize targets 256 MiB chunks: comfortably under
+	// DefaultPartSize targets 256 MiB archive parts: comfortably under
 	// CDN cacheable-object caps and a sane unit for parallel fetch/retry.
-	DefaultSnapshotChunkSize = 256 << 20
+	DefaultPartSize = 256 << 20
 
 	DefaultServerListen = ":1323"
 )
+
+// DefaultCompactEvery is the default set of aligned compaction
+// intervals, in epochs: with hourly cuts, daily and weekly.
+var DefaultCompactEvery = []int{24, 168}
 
 type Server struct {
 	dal  domain.DAL
 	db   *DB
 	docs BlobStore
-	key  ed25519.PrivateKey
 
 	// pubDir is the root of the published static file tree (contains v1/).
 	pubDir string
 
-	cutInterval       time.Duration
-	snapshotEvery     int
-	snapshotChunkSize int
+	channels      []channel
+	cutInterval   time.Duration
+	snapshotEvery int
+	partSize      int
+	// compactEvery lists the aligned intervals, in epochs, at which
+	// patches are compacted into coarser ranges.
+	compactEvery []int
 
 	cutMu sync.Mutex
 }
@@ -54,21 +61,17 @@ func NewServer(dataDir string) (*Server, error) {
 		return nil, err
 	}
 
-	key, err := loadOrCreateServerKey(dataDir)
-	if err != nil {
-		return nil, err
-	}
-
 	s := &Server{
-		dal:               domain.NewDAL(db.DB),
-		db:                db,
-		docs:              docs,
-		key:               key,
-		pubDir:            filepath.Join(dataDir, "public"),
-		cutInterval:       DefaultCutInterval,
-		snapshotEvery:     DefaultSnapshotEvery,
-		snapshotChunkSize: DefaultSnapshotChunkSize,
+		dal:           domain.NewDAL(db.DB),
+		db:            db,
+		docs:          docs,
+		pubDir:        filepath.Join(dataDir, "public"),
+		cutInterval:   DefaultCutInterval,
+		snapshotEvery: DefaultSnapshotEvery,
+		partSize:      DefaultPartSize,
+		compactEvery:  slices.Clone(DefaultCompactEvery),
 	}
+	s.channels = s.defaultChannels()
 
 	if err := os.MkdirAll(filepath.Join(s.pubDir, "v1"), 0755); err != nil {
 		return nil, err
@@ -86,10 +89,13 @@ func NewServer(dataDir string) (*Server, error) {
 // ServerOptions overrides server tunables. Zero values keep the
 // defaults set in NewServer.
 type ServerOptions struct {
-	Listen            string
-	CutInterval       time.Duration
-	SnapshotEvery     int
-	SnapshotChunkSize int
+	Listen        string
+	CutInterval   time.Duration
+	SnapshotEvery int
+	PartSize      int
+	// CompactEvery replaces the compaction intervals when non-nil; an
+	// empty, non-nil slice disables compaction.
+	CompactEvery []int
 }
 
 func Start2(dataDir string, opts ServerOptions) {
@@ -104,8 +110,11 @@ func Start2(dataDir string, opts ServerOptions) {
 	if opts.SnapshotEvery > 0 {
 		server.snapshotEvery = opts.SnapshotEvery
 	}
-	if opts.SnapshotChunkSize > 0 {
-		server.snapshotChunkSize = opts.SnapshotChunkSize
+	if opts.PartSize > 0 {
+		server.partSize = opts.PartSize
+	}
+	if opts.CompactEvery != nil {
+		server.compactEvery = slices.Clone(opts.CompactEvery)
 	}
 	listen := opts.Listen
 	if listen == "" {
@@ -118,11 +127,21 @@ func Start2(dataDir string, opts ServerOptions) {
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))
 }
 
-// SetSnapshotChunkSize overrides the snapshot chunk target size in
-// bytes. It exists so tests can exercise multi-chunk snapshots without
-// gigabytes of fixture data; the default suits production.
-func (s *Server) SetSnapshotChunkSize(n int) {
-	s.snapshotChunkSize = n
+// SetPartSize overrides the archive part target size in bytes. It
+// exists so tests can exercise multi-part archives without gigabytes of
+// fixture data; the default suits production.
+func (s *Server) SetPartSize(n int) {
+	s.partSize = n
+}
+
+// SetCompactEvery overrides the patch compaction intervals.
+func (s *Server) SetCompactEvery(intervals ...int) {
+	s.compactEvery = slices.Clone(intervals)
+}
+
+// SetSnapshotEvery overrides the snapshot cadence, in epochs.
+func (s *Server) SetSnapshotEvery(n int) {
+	s.snapshotEvery = n
 }
 
 // Handler returns the server's HTTP handler, for embedding or tests.

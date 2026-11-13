@@ -8,7 +8,9 @@ package fsstore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -59,7 +61,11 @@ func (s *Store) GetBlob(hash string) ([]byte, error) {
 		return nil, err
 	}
 
-	return os.ReadFile(path)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("fsstore: blob %s: %w", hash, client.ErrBlobNotFound)
+	}
+	return data, err
 }
 
 func (s *Store) LoadState() (*client.State, error) {

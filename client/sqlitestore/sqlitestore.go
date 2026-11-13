@@ -40,10 +40,9 @@ CREATE TABLE IF NOT EXISTS corpus_docs (
 
 -- A feed's sync state; a feed without a row has never saved state.
 CREATE TABLE IF NOT EXISTS corpus_feeds (
-	feed          TEXT PRIMARY KEY,
-	epoch         INTEGER NOT NULL,
-	manifest_hash TEXT NOT NULL,
-	server_key    TEXT NOT NULL
+	feed    TEXT PRIMARY KEY,
+	channel TEXT NOT NULL,
+	epoch   INTEGER NOT NULL
 );
 -- Which feeds hold which documents, so removing a feed can drop the
 -- documents no other feed holds.
@@ -208,7 +207,7 @@ func (s *Store) PutBlob(hash string, data []byte) error {
 func (s *Store) GetBlob(hash string) ([]byte, error) {
 	data, err := getBlob(s.d.db, hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("sqlitestore: no blob %s", hash)
+		return nil, fmt.Errorf("sqlitestore: blob %s: %w", hash, client.ErrBlobNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sqlitestore: blob %s: %w", hash, err)
@@ -228,8 +227,8 @@ func (s *Store) LoadState() (*client.State, error) {
 		Heads: map[string]client.Head{},
 		Push:  map[string]client.PushState{},
 	}
-	err = tx.QueryRow(`SELECT epoch, manifest_hash, server_key FROM corpus_feeds WHERE feed = ?`, s.feed).
-		Scan(&state.Epoch, &state.ManifestHash, &state.ServerKey)
+	err = tx.QueryRow(`SELECT channel, epoch FROM corpus_feeds WHERE feed = ?`, s.feed).
+		Scan(&state.Channel, &state.Epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // no state saved yet
 	}
@@ -275,7 +274,7 @@ func (s *Store) LoadState() (*client.State, error) {
 }
 
 // SaveState replaces the feed's whole persisted state in one
-// transaction, keeping epoch, chain hash, and heads consistent as the
+// transaction, keeping channel, epoch, and heads consistent as the
 // Store contract requires.
 func (s *Store) SaveState(state *client.State) error {
 	tx, err := s.d.db.Begin()
@@ -284,10 +283,9 @@ func (s *Store) SaveState(state *client.State) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO corpus_feeds (feed, epoch, manifest_hash, server_key) VALUES (?, ?, ?, ?)
-		ON CONFLICT (feed) DO UPDATE SET epoch = excluded.epoch,
-			manifest_hash = excluded.manifest_hash, server_key = excluded.server_key`,
-		s.feed, state.Epoch, state.ManifestHash, state.ServerKey); err != nil {
+	if _, err := tx.Exec(`INSERT INTO corpus_feeds (feed, channel, epoch) VALUES (?, ?, ?)
+		ON CONFLICT (feed) DO UPDATE SET channel = excluded.channel, epoch = excluded.epoch`,
+		s.feed, state.Channel, state.Epoch); err != nil {
 		return err
 	}
 
