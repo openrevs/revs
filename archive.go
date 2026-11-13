@@ -53,17 +53,18 @@ func tarSize(n int) int {
 }
 
 // Add appends one entry, starting a new part first if the open part
-// would overflow the target size.
-func (w *archiveWriter) Add(name string, data []byte) error {
+// would overflow the target size, and returns the part (numbered from 1)
+// that holds it.
+func (w *archiveWriter) Add(name string, data []byte) (int, error) {
 	n := tarSize(len(data))
 	if w.tw != nil && w.size > 0 && w.size+n > w.partSize {
 		if err := w.closePart(); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if w.tw == nil {
 		if err := w.openPart(); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -76,14 +77,14 @@ func (w *archiveWriter) Add(name string, data []byte) error {
 		Format:   tar.FormatUSTAR,
 	}
 	if err := w.tw.WriteHeader(hdr); err != nil {
-		return fmt.Errorf("archive entry %s: %w", name, err)
+		return 0, fmt.Errorf("archive entry %s: %w", name, err)
 	}
 	if _, err := w.tw.Write(data); err != nil {
-		return err
+		return 0, err
 	}
 	w.size += n
 
-	return nil
+	return w.parts, nil
 }
 
 // Close finishes the last part and returns the number of parts written.

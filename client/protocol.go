@@ -26,22 +26,21 @@ const (
 	// otherwise: the server's primary feed.
 	DefaultChannel = "main"
 
-	// removedFile is the reserved control file in part 1 of a patch
-	// listing the users that left the channel in the patch's range.
-	removedFile = "removed.json"
-
 	// maxEntrySize bounds a single archive entry. Servers cap documents
 	// well below this; the bound only stops a hostile archive from
 	// exhausting memory.
 	maxEntrySize = 16 << 20
 )
 
-// publicationIndex is the server's /v1/index.json. It is unsigned:
-// documents are the unit of trust, and each one is verified against its
-// author's signature as it is applied.
+// publicationIndex is the server's /v1/index.json. It is unsigned: it
+// advertises the server key, which is pinned on first use, and
+// everything it points to is verified (manifests against the pinned
+// server key, documents against their authors' signatures).
 type publicationIndex struct {
-	Created  string                   `json:"created"`
-	Channels map[string]*channelIndex `json:"channels"`
+	Created   string                   `json:"created"`
+	ServerID  string                   `json:"server_id"`
+	ServerKey string                   `json:"server_key"`
+	Channels  map[string]*channelIndex `json:"channels"`
 }
 
 type channelIndex struct {

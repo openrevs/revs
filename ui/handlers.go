@@ -471,13 +471,14 @@ func (a *App) serverShow(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	a.render(w, r, http.StatusOK, "server.html", view{Title: st.Server.Url, Nav: "servers", Data: map[string]any{
-		"Server":   st.Server,
-		"Epoch":    st.Epoch,
-		"Users":    st.Users,
-		"Mine":     st.Mine,
-		"MyID":     st.MyID,
-		"Conflict": r.URL.Query().Get("conflict"),
-		"Diverged": r.URL.Query().Get("diverged") != "",
+		"Server":    st.Server,
+		"Epoch":     st.Epoch,
+		"Users":     st.Users,
+		"Mine":      st.Mine,
+		"MyID":      st.MyID,
+		"Conflict":  r.URL.Query().Get("conflict"),
+		"Diverged":  r.URL.Query().Get("diverged") != "",
+		"KeyChange": r.URL.Query().Get("keychanged") != "",
 	}})
 	return nil
 }
@@ -524,9 +525,13 @@ func (a *App) doPull(w http.ResponseWriter, r *http.Request, rebootstrap bool) e
 	res, err := a.c.Pull(ctx, id, rebootstrap)
 
 	var diverged *client.DivergedError
+	var keyChanged *client.KeyChangedError
 	switch {
 	case errors.As(err, &diverged):
 		redirect(w, r, serverURL(id)+"?diverged=1", "", "")
+		return nil
+	case errors.As(err, &keyChanged):
+		redirect(w, r, serverURL(id)+"?keychanged=1", "", "")
 		return nil
 	case errors.Is(err, collection.ErrNotFound):
 		return err
@@ -546,7 +551,7 @@ func (a *App) serverReset(w http.ResponseWriter, r *http.Request) error {
 	if err := a.c.ResetServer(r.Context(), id); err != nil {
 		return err
 	}
-	redirect(w, r, serverURL(id), "ok", "Discarded everything pulled from this server. Pull to start fresh.")
+	redirect(w, r, serverURL(id), "ok", "Discarded everything pulled from this server, including its pinned key. Pull to start fresh.")
 	return nil
 }
 

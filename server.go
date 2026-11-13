@@ -2,6 +2,7 @@ package revs
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -35,6 +36,9 @@ type Server struct {
 	dal  domain.DAL
 	db   *DB
 	docs BlobStore
+	// key is the server's identity: it signs every manifest, and its
+	// derived id is how consumers track the server.
+	key ed25519.PrivateKey
 
 	// pubDir is the root of the published static file tree (contains v1/).
 	pubDir string
@@ -61,10 +65,16 @@ func NewServer(dataDir string) (*Server, error) {
 		return nil, err
 	}
 
+	key, err := loadOrCreateServerKey(dataDir)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		dal:           domain.NewDAL(db.DB),
 		db:            db,
 		docs:          docs,
+		key:           key,
 		pubDir:        filepath.Join(dataDir, "public"),
 		cutInterval:   DefaultCutInterval,
 		snapshotEvery: DefaultSnapshotEvery,

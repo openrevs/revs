@@ -59,8 +59,8 @@ func (c *Collection) RemoveServer(ctx context.Context, id int64) error {
 	})
 }
 
-// ResetServer discards everything pulled from a server, so the next
-// pull starts fresh.
+// ResetServer discards everything pulled from a server, including its
+// pinned key, so the next pull starts fresh.
 func (c *Collection) ResetServer(ctx context.Context, id int64) error {
 	if _, err := c.Server(ctx, id); err != nil {
 		return err
@@ -162,7 +162,9 @@ func PushMessage(res *client.PushResult) string {
 
 // Pull syncs a server's published corpus and refreshes the index of
 // its reviews; with rebootstrap, it starts over from a snapshot. A
-// *client.DivergedError suggests rebootstrapping.
+// *client.DivergedError suggests rebootstrapping; a
+// *client.KeyChangedError suggests ResetServer, if the user trusts the
+// change.
 func (c *Collection) Pull(ctx context.Context, id int64, rebootstrap bool) (*client.Result, error) {
 	s, err := c.Server(ctx, id)
 	if err != nil {

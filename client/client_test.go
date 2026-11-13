@@ -20,6 +20,7 @@ import (
 	"github.com/openrevs/revs/client/fsstore"
 	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/openrevs/revs/domain"
+	revkeys "github.com/openrevs/revs/keys"
 	"github.com/stretchr/testify/require"
 )
 
@@ -237,9 +238,6 @@ func TestStalePush(t *testing.T) {
 	require.Equal(t, 3, pr.Rev)
 }
 
-// rewriteIndex proxies to upstream, mutating index.json so retention
-// states the server itself never enters (v1 keeps everything) can be
-// exercised.
 // cut runs a cut and returns the main channel's new epoch (0 if it
 // didn't change).
 func cut(t *testing.T, s *revs.Server) int {
@@ -255,11 +253,23 @@ func cut(t *testing.T, s *revs.Server) int {
 func proxy(t *testing.T, upstream string, mutate func(ch map[string]any)) (*httptest.Server, *[]string) {
 	t.Helper()
 
+	return proxyPaths(t, func(path string) string { return upstream + path }, func(idx map[string]any) {
+		if mutate != nil {
+			mutate(idx["channels"].(map[string]any)[client.DefaultChannel].(map[string]any))
+		}
+	})
+}
+
+// proxyPaths fronts one or more servers: route maps each requested path
+// to the URL to fetch it from, and mutate may rewrite index.json.
+func proxyPaths(t *testing.T, route func(path string) string, mutate func(idx map[string]any)) (*httptest.Server, *[]string) {
+	t.Helper()
+
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 
-		resp, err := http.Get(upstream + r.URL.Path)
+		resp, err := http.Get(route(r.URL.Path))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -269,7 +279,7 @@ func proxy(t *testing.T, upstream string, mutate func(ch map[string]any)) (*http
 		if mutate != nil && resp.StatusCode == http.StatusOK && r.URL.Path == "/v1/index.json" {
 			var idx map[string]any
 			require.NoError(t, json.Unmarshal(body, &idx))
-			mutate(idx["channels"].(map[string]any)[client.DefaultChannel].(map[string]any))
+			mutate(idx)
 			body, err = json.Marshal(idx)
 			require.NoError(t, err)
 		}
@@ -280,6 +290,25 @@ func proxy(t *testing.T, upstream string, mutate func(ch map[string]any)) (*http
 	t.Cleanup(srv.Close)
 
 	return srv, &paths
+}
+
+// indexKey fetches the server key and id a server advertises.
+func indexKey(t *testing.T, url string) (ed25519.PublicKey, string) {
+	t.Helper()
+
+	resp, err := http.Get(url + "/v1/index.json")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var idx struct {
+		ServerID  string `json:"server_id"`
+		ServerKey string `json:"server_key"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&idx))
+	pub, err := revkeys.ParsePublic(idx.ServerKey)
+	require.NoError(t, err)
+
+	return pub, idx.ServerID
 }
 
 func archivePaths(paths []string) []string {
@@ -506,7 +535,7 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	// fall back on, no route leads forward.
 	require.NoError(t, os.Remove(filepath.Join(storeDir, "docs", base.Hash[:2], base.Hash)))
 
-	noSnapshots, _ := proxy(t, ts.URL, func(ch map[string]any) {
+	noSnapshots, paths := proxy(t, ts.URL, func(ch map[string]any) {
 		ch["snapshots"] = []any{}
 	})
 	_, err = newClientAt(t, noSnapshots.URL, storeDir).Sync(ctx)
@@ -514,6 +543,10 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	require.ErrorAs(t, err, &diverged)
 	require.Equal(t, uid, diverged.UserID)
 	require.Equal(t, base.Hash, diverged.WantBase)
+	// The manifest showed the base was missing; the patch itself was
+	// never downloaded.
+	require.Contains(t, *paths, "/v1/main/patch-manifest-1-2.sjsonl.gz")
+	require.Empty(t, archivePaths(*paths))
 
 	// With a snapshot available, sync repairs the corpus from it.
 	res, err := newClientAt(t, ts.URL, storeDir).Sync(ctx)
@@ -522,9 +555,13 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	require.Equal(t, "fallback", res.BootstrapReason)
 	require.Equal(t, 2, res.Epoch)
 
-	// An explicit rebuild starts over from the snapshot.
-	res, err = newClientAt(t, ts.URL, storeDir).Rebootstrap(ctx)
+	// An explicit rebuild starts over from the snapshot, whose manifest
+	// shows every document is already held: nothing is downloaded.
+	rec, paths := proxy(t, ts.URL, nil)
+	res, err = newClientAt(t, rec.URL, storeDir).Rebootstrap(ctx)
 	require.NoError(t, err)
+	require.Contains(t, *paths, "/v1/main/snapshot-manifest-1.sjsonl.gz")
+	require.Empty(t, archivePaths(*paths))
 	require.True(t, res.Bootstrapped)
 	require.Equal(t, "rebootstrap", res.BootstrapReason)
 	require.Equal(t, 2, res.Epoch)
@@ -533,6 +570,169 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, doc.Rev)
 	require.Contains(t, string(doc.Data), "替身演員")
+}
+
+func TestKeyPinning(t *testing.T) {
+	ctx := context.Background()
+	s, ts := startServer(t)
+	key := newKey(t)
+
+	publisher := newClient(t, ts.URL)
+	_, err := publisher.Push(ctx, key, content(key, "Alien"))
+	require.NoError(t, err)
+	cut(t, s)
+
+	// Pre-pinning the right key works.
+	realKey, _ := indexKey(t, ts.URL)
+	_, err = newClient(t, ts.URL, client.WithServerKey(realKey)).Sync(ctx)
+	require.NoError(t, err)
+
+	// Pre-pinning another key fails before anything is fetched.
+	wrongPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_, err = newClient(t, ts.URL, client.WithServerKey(wrongPub)).Sync(ctx)
+	var keyChanged *client.KeyChangedError
+	require.ErrorAs(t, err, &keyChanged)
+
+	// A store that pinned the real key on first use refuses a
+	// conflicting configured key.
+	tofuDir := t.TempDir()
+	_, err = newClientAt(t, ts.URL, tofuDir).Sync(ctx)
+	require.NoError(t, err)
+	_, err = newClientAt(t, ts.URL, tofuDir, client.WithServerKey(wrongPub)).Sync(ctx)
+	require.ErrorAs(t, err, &keyChanged)
+
+	// ...and a server that starts advertising another key.
+	other, otherTS := startServer(t)
+	otherPub := newClient(t, otherTS.URL)
+	_, err = otherPub.Push(ctx, key, content(key, "Alien"))
+	require.NoError(t, err)
+	cut(t, other)
+	_, err = newClientAt(t, otherTS.URL, tofuDir).Sync(ctx)
+	require.ErrorAs(t, err, &keyChanged)
+
+	// An index whose server id doesn't match its key is rejected.
+	badID, _ := proxyPaths(t, func(p string) string { return ts.URL + p }, func(idx map[string]any) {
+		idx["server_id"] = strings.Repeat("0", 64)
+	})
+	_, err = newClient(t, badID.URL).Sync(ctx)
+	require.ErrorContains(t, err, "does not match its key")
+
+	// Manifests must be signed by the pinned key, even when the index
+	// advertises the right one.
+	_, err = publisher.Push(ctx, key, content(key, "Alien", "Heat"))
+	require.NoError(t, err)
+	cut(t, s)
+	_, err = otherPub.Push(ctx, key, content(key, "Alien", "Heat"))
+	require.NoError(t, err)
+	cut(t, other)
+	forged, _ := proxyPaths(t, func(p string) string {
+		if strings.Contains(p, "manifest") {
+			return otherTS.URL + p
+		}
+		return ts.URL + p
+	}, nil)
+	_, err = newClientAt(t, forged.URL, tofuDir).Sync(ctx)
+	require.ErrorAs(t, err, &keyChanged)
+}
+
+// TestManifestChecks checks a manifest validly signed by the server is
+// still rejected if it describes a different publication than the one
+// requested.
+func TestManifestChecks(t *testing.T) {
+	ctx := context.Background()
+	s, ts := startServer(t)
+	key := newKey(t)
+
+	publisher := newClient(t, ts.URL)
+	_, err := publisher.Push(ctx, key, content(key, "Alien"))
+	require.NoError(t, err)
+	cut(t, s)
+
+	dir := t.TempDir()
+	_, err = newClientAt(t, ts.URL, dir).Sync(ctx)
+	require.NoError(t, err)
+
+	_, err = publisher.Push(ctx, key, content(key, "Alien", "Heat"))
+	require.NoError(t, err)
+	cut(t, s)
+
+	for name, tc := range map[string]struct {
+		swap func(string) string
+		err  string
+	}{
+		"another range": {
+			func(p string) string { return strings.Replace(p, "patch-manifest-1-2", "patch-manifest-0-1", 1) },
+			"does not describe patch 1-2",
+		},
+		"another channel": {
+			func(p string) string { return strings.Replace(p, "/main/", "/direct/", 1) },
+			`manifest is for channel "direct"`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			swapped, _ := proxyPaths(t, func(p string) string {
+				if strings.Contains(p, "manifest") {
+					p = tc.swap(p)
+				}
+				return ts.URL + p
+			}, nil)
+			_, err := newClientAt(t, swapped.URL, dir).Sync(ctx)
+			require.ErrorContains(t, err, tc.err)
+		})
+	}
+
+	// The untampered route still works.
+	res, err := newClientAt(t, ts.URL, dir).Sync(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Epoch)
+}
+
+// TestManifestSkipsDownloads checks a consumer downloads only the
+// archive parts holding documents it lacks.
+func TestManifestSkipsDownloads(t *testing.T) {
+	ctx := context.Background()
+	s, ts := startServer(t)
+	s.SetPartSize(1) // one entry per part
+
+	rejected := map[string]bool{}
+	require.NoError(t, s.AddChannel("vetted", func(d *domain.Document) bool { return !rejected[d.Userid] }))
+
+	keys := []ed25519.PrivateKey{newKey(t), newKey(t), newKey(t)}
+	ids := make([]string, len(keys))
+	publisher := newClient(t, ts.URL)
+	for i, key := range keys {
+		ids[i] = client.UserID(key.Public().(ed25519.PublicKey))
+		rejected[ids[i]] = i == 1
+		_, err := publisher.Push(ctx, key, content(key, fmt.Sprintf("Movie %d", i)))
+		require.NoError(t, err)
+	}
+	cut(t, s)
+
+	// Following vetted, the consumer holds users 0 and 2.
+	dir := t.TempDir()
+	rec, paths := proxy(t, ts.URL, nil)
+	_, err := newClientAt(t, rec.URL, dir, client.WithChannel("vetted")).Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, archivePaths(*paths), 2)
+
+	// Switching to main, it fetches only the part holding user 1.
+	*paths = nil
+	res, err := newClientAt(t, rec.URL, dir).Sync(ctx)
+	require.NoError(t, err)
+	require.True(t, res.Bootstrapped)
+	require.Len(t, archivePaths(*paths), 1)
+	_, err = newClientAt(t, ts.URL, dir).Document(ids[1])
+	require.NoError(t, err)
+
+	// A patch whose documents arrived some other way is skipped too:
+	// the direct channel holds the same documents as main.
+	*paths = nil
+	res, err = newClientAt(t, rec.URL, dir, client.WithChannel(revs.ChannelDirect)).Sync(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Epoch)
+	require.Empty(t, archivePaths(*paths))
+	require.Contains(t, *paths, "/v1/direct/snapshot-manifest-1.sjsonl.gz")
 }
 
 func TestPushContentValidation(t *testing.T) {

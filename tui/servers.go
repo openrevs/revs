@@ -113,6 +113,7 @@ const (
 	noProblem serverProblem = iota
 	problemConflict
 	problemDiverged
+	problemKeyChanged
 )
 
 type serverScreen struct {
@@ -184,13 +185,13 @@ func (s *serverScreen) update(a *app, msg tea.Msg) tea.Cmd {
 		}
 		a.info(fmt.Sprintf("Merged revision %d. %s", rev, stats))
 	case "R":
-		a.confirmThen("Discard everything pulled from this server?", func(a *app) tea.Cmd {
+		a.confirmThen("Discard everything pulled from this server, including its pinned key?", func(a *app) tea.Cmd {
 			if err := a.c.ResetServer(a.ctx, s.id); err != nil {
 				a.fail(err)
 				return nil
 			}
 			s.problem = noProblem
-			a.info("Discarded everything pulled from this server. Pull to start fresh.")
+			a.info("Discarded everything pulled from this server, including its pinned key. Pull to start fresh.")
 			a.reload()
 			return nil
 		})
@@ -236,10 +237,14 @@ func (s *serverScreen) pull(a *app, rebootstrap bool) tea.Cmd {
 		res, err := a.c.Pull(ctx, id, rebootstrap)
 		return func(a *app) tea.Cmd {
 			var diverged *client.DivergedError
+			var keyChanged *client.KeyChangedError
 			switch {
 			case errors.As(err, &diverged):
 				s.problem = problemDiverged
 				a.fail(errors.New("pull failed: this server's history no longer matches your copy"))
+			case errors.As(err, &keyChanged):
+				s.problem = problemKeyChanged
+				a.fail(errors.New("pull failed: the server is signing with a different key"))
 			case err != nil:
 				a.fail(fmt.Errorf("pull failed: %w", err))
 			default:
@@ -265,6 +270,9 @@ func (s *serverScreen) banner(width int) string {
 	case problemDiverged:
 		text = "Your copy of this server's data no longer matches what it publishes. No published update applies to it, which can mean local corruption or that the server rewrote its history.\n\n" +
 			"Press b to re-download from a snapshot."
+	case problemKeyChanged:
+		text = "The server is signing with a different key than the one pinned on first contact. Either the server's identity changed or something is intercepting it.\n\n" +
+			"Only if you trust the change, press R to forget pulled data and re-pin its key."
 	default:
 		return ""
 	}

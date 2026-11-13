@@ -1,7 +1,8 @@
 // Package client is a generic consumer of the revs publishing scheme
 // (specs/publishing-v2.md in the website repo). It follows one of a
-// server's channels, pulling its snapshots and patches and verifying
-// every document against its author's signature, and pushes signed
+// server's channels, pulling its snapshots and patches as their signed
+// manifests direct and verifying every document against its author's
+// signature, and pushes signed
 // documents with the revision discipline the protocol asks of clients.
 //
 // The package traffics in raw signed sjsonl documents and knows nothing
@@ -14,6 +15,7 @@ package client
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"iter"
@@ -22,6 +24,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/openrevs/revs/keys"
 )
 
 type Client struct {
@@ -29,6 +33,7 @@ type Client struct {
 	http    *http.Client
 	store   Store
 	channel string
+	pin     ed25519.PublicKey // optional pre-pinned server key
 	history *History
 
 	mu    sync.Mutex
@@ -57,6 +62,13 @@ func WithHistory(h *History) Option {
 // a store to another channel rebuilds its corpus on the next Sync.
 func WithChannel(name string) Option {
 	return func(c *Client) { c.channel = name }
+}
+
+// WithServerKey pre-pins the server's public key, obtained out of band.
+// Without it, the key is pinned trust-on-first-use from the server's
+// index. Either way, a later mismatch is a hard KeyChangedError.
+func WithServerKey(pub ed25519.PublicKey) Option {
+	return func(c *Client) { c.pin = pub }
 }
 
 func New(baseURL string, store Store, opts ...Option) *Client {
@@ -180,6 +192,42 @@ func (c *Client) ensureState() error {
 
 	c.state = state
 	return nil
+}
+
+// resolvePin returns the base64 server key every manifest must be signed
+// with, checking the index agrees: the stored pin, else the configured
+// key, else (trust on first use) the key the index advertises. Callers
+// hold c.mu.
+func (c *Client) resolvePin(idx *publicationIndex) (string, error) {
+	pub, err := keys.ParsePublic(idx.ServerKey)
+	if err != nil {
+		return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
+	}
+	if id := keys.UserID(pub); id != idx.ServerID {
+		return "", fmt.Errorf("client: index server id %s does not match its key (%s)", idx.ServerID, id)
+	}
+
+	advertised := keys.EncodePublic(pub)
+
+	pin := ""
+	if c.pin != nil {
+		pin = keys.EncodePublic(c.pin)
+	}
+	if stored := c.state.ServerKey; stored != "" {
+		if pin != "" && pin != stored {
+			return "", &KeyChangedError{Pinned: stored, Got: pin}
+		}
+		pin = stored
+	}
+	if pin == "" {
+		pin = advertised
+	}
+
+	if advertised != pin {
+		return "", &KeyChangedError{Pinned: pin, Got: advertised}
+	}
+
+	return pin, nil
 }
 
 func (c *Client) fetch(ctx context.Context, path string) ([]byte, error) {

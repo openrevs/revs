@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +139,50 @@ func readArtifact(t *testing.T, ts *httptest.Server, channel, base string, parts
 	return all
 }
 
+// testManifest is a parsed manifest: its metadata line, entries by user
+// id, and removals.
+type testManifest struct {
+	meta    map[string]any
+	entries map[string]manifestEntry
+	removed []string
+}
+
+// readManifest fetches a manifest and checks that it is a gzipped sjsonl
+// document signed with the server key.
+func readManifest(t *testing.T, s *Server, ts *httptest.Server, path string) testManifest {
+	t.Helper()
+
+	gr, err := gzip.NewReader(bytes.NewReader(fetch(t, ts, path)))
+	require.NoError(t, err)
+	data, err := io.ReadAll(gr)
+	require.NoError(t, err)
+
+	doc, err := jsonlines.Parse(data)
+	require.NoError(t, err)
+	require.Equal(t, keys.EncodePublic(s.key.Public().(ed25519.PublicKey)), keys.EncodePublic(doc.Info().SignerKey))
+
+	m := testManifest{entries: map[string]manifestEntry{}}
+	for _, line := range bytes.Split(bytes.TrimSpace(doc.JSON()), []byte("\n"))[1:] {
+		switch {
+		case gjson.GetBytes(line, "manifest").Exists():
+			require.Nil(t, m.meta, "multiple metadata lines")
+			require.NoError(t, json.Unmarshal(line, &m.meta))
+		case gjson.GetBytes(line, "id").Exists():
+			var e manifestEntry
+			require.NoError(t, json.Unmarshal(line, &e))
+			m.entries[e.ID] = e
+		case gjson.GetBytes(line, "removed").Exists():
+			m.removed = append(m.removed, gjson.GetBytes(line, "removed").String())
+		default:
+			t.Fatalf("unexpected manifest line %s", line)
+		}
+	}
+	require.NotNil(t, m.meta)
+	slices.Sort(m.removed)
+
+	return m
+}
+
 func readIndex(t *testing.T, ts *httptest.Server) publicationIndex {
 	t.Helper()
 
@@ -202,6 +248,11 @@ func TestPublishingRoundTrip(t *testing.T) {
 	assert.Empty(t, idx.Channels[ChannelMain].Patches)
 	assert.Empty(t, idx.Channels[ChannelMain].Snapshots)
 
+	// The index advertises the server's key and the id derived from it.
+	pub := s.key.Public().(ed25519.PublicKey)
+	assert.Equal(t, keys.EncodePublic(pub), idx.ServerKey)
+	assert.Equal(t, keys.UserID(pub), idx.ServerID)
+
 	u1, u2 := NewUser(), NewUser()
 	many := titles(40, "Movie")
 	doc1 := signedDoc(t, u1, 1, many...)
@@ -235,6 +286,32 @@ func TestPublishingRoundTrip(t *testing.T) {
 		u2.ID + "-1.sjsonl": canon2,
 	}, patch)
 
+	// Its signed manifest names the publication and lists each entry's
+	// resulting document and part.
+	_, hash1 := canonical(t, doc1)
+	_, hash2 := canonical(t, doc2)
+	m := readManifest(t, s, ts, "/v1/main/patch-manifest-0-1.sjsonl.gz")
+	assert.Equal(t, "patch", m.meta["manifest"])
+	assert.Equal(t, idx.ServerID, m.meta["server_id"])
+	assert.Equal(t, ChannelMain, m.meta["channel"])
+	assert.Equal(t, []any{0.0, 1.0}, m.meta["range"])
+	assert.NotContains(t, m.meta, "epoch")
+	assert.Equal(t, 1.0, m.meta["format"])
+	_, err = time.Parse(time.RFC3339, m.meta["created"].(string))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]manifestEntry{
+		u1.ID: {ID: u1.ID, Rev: 1, Hash: hash1, Part: 1},
+		u2.ID: {ID: u2.ID, Rev: 1, Hash: hash2, Part: 1},
+	}, m.entries)
+	assert.Empty(t, m.removed)
+
+	m = readManifest(t, s, ts, "/v1/direct/snapshot-manifest-1.sjsonl.gz")
+	assert.Equal(t, "snapshot", m.meta["manifest"])
+	assert.Equal(t, ChannelDirect, m.meta["channel"])
+	assert.Equal(t, 1.0, m.meta["epoch"])
+	assert.NotContains(t, m.meta, "range")
+	assert.Len(t, m.entries, 2)
+
 	// A small change to a big document ships as an sjsonl patch from the
 	// rev the channel held to the new one.
 	many[7] = "Changed"
@@ -251,8 +328,14 @@ func TestPublishingRoundTrip(t *testing.T) {
 	assert.Equal(t, "patch", gjson.GetBytes(bytes.SplitN(entry, []byte("\n"), 2)[0], "sjsonl").String())
 	applied, _, err := jsonlines.Patch(canon1, entry)
 	require.NoError(t, err)
-	canon1b, _ := canonical(t, doc1b)
+	canon1b, hash1b := canonical(t, doc1b)
 	assert.Equal(t, canon1b, applied)
+
+	// A patch entry's manifest line names its base.
+	m = readManifest(t, s, ts, "/v1/main/patch-manifest-1-2.sjsonl.gz")
+	assert.Equal(t, map[string]manifestEntry{
+		u1.ID: {ID: u1.ID, Rev: 2, Hash: hash1b, BaseRev: 1, BaseHash: hash1, Part: 1},
+	}, m.entries)
 
 	// The snapshot at epoch 2 holds every user's full document.
 	snap := readArtifact(t, ts, ChannelMain, "snapshot-2", 1)
@@ -292,6 +375,21 @@ func TestMultiPartArchives(t *testing.T) {
 	snap := readArtifact(t, ts, ChannelMain, "snapshot-1", 3)
 	for _, u := range users {
 		require.Contains(t, snap, u.ID+"-1.sjsonl")
+	}
+
+	// One manifest covers all parts, saying which part holds each entry.
+	m := readManifest(t, s, ts, "/v1/main/snapshot-manifest-1.sjsonl.gz")
+	require.Len(t, m.entries, 3)
+	for i := 1; i <= 3; i++ {
+		name := readPart(t, ts, fmt.Sprintf("/v1/main/snapshot-1_%d.tar.gz", i))[0].name
+		var holder string
+		for id, e := range m.entries {
+			if e.Part == i {
+				require.Empty(t, holder, "two entries in part %d", i)
+				holder = id
+			}
+		}
+		assert.Equal(t, holder+"-1.sjsonl", name)
 	}
 }
 
@@ -358,11 +456,12 @@ func TestChannelRemoval(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{"vetted": 2}, cut)
 
+	// The removal is in the manifest; the archive is empty.
 	patch := readArtifact(t, ts, "vetted", "patch-1-2", 1)
-	require.Equal(t, []string{removedFile}, slices.Collect(maps.Keys(patch)))
-	var removed []string
-	require.NoError(t, json.Unmarshal(patch[removedFile], &removed))
-	assert.Equal(t, []string{u2.ID}, removed)
+	assert.Empty(t, patch)
+	m := readManifest(t, s, ts, "/v1/vetted/patch-manifest-1-2.sjsonl.gz")
+	assert.Empty(t, m.entries)
+	assert.Equal(t, []string{u2.ID}, m.removed)
 
 	snap := readArtifact(t, ts, "vetted", "snapshot-2", 1)
 	assert.Equal(t, []string{u1.ID + "-1.sjsonl"}, slices.Collect(maps.Keys(snap)))
@@ -374,6 +473,9 @@ func TestChannelRemoval(t *testing.T) {
 	assert.Equal(t, 3, cut["vetted"])
 	patch = readArtifact(t, ts, "vetted", "patch-2-3", 1)
 	assert.Equal(t, []string{u2.ID + "-1.sjsonl"}, slices.Collect(maps.Keys(patch)))
+	m = readManifest(t, s, ts, "/v1/vetted/patch-manifest-2-3.sjsonl.gz")
+	assert.Empty(t, m.removed)
+	assert.Contains(t, m.entries, u2.ID)
 }
 
 func TestDirectChannel(t *testing.T) {

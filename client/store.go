@@ -28,6 +28,9 @@ type State struct {
 	// Epoch is the channel epoch the corpus is synced to, 0 before any
 	// sync.
 	Epoch int `json:"epoch"`
+	// ServerKey is the pinned server public key (base64), set on first
+	// sync. It survives channel switches and Rebootstrap.
+	ServerKey string `json:"server_key,omitempty"`
 
 	Heads map[string]Head      `json:"heads,omitempty"`
 	Push  map[string]PushState `json:"push,omitempty"`

@@ -29,15 +29,37 @@ type Result struct {
 	// Changed lists the users whose current document changed or who
 	// left the channel, sorted.
 	Changed []string
+
+	// Equivocations lists users the server published at a revision the
+	// client already held with a different document: the author signed
+	// two documents with the same rev. The client follows the channel
+	// (it now holds the published one); resolving the fork is up to the
+	// caller.
+	Equivocations []Equivocation
+}
+
+// Equivocation is two different signed documents for one user and rev.
+type Equivocation struct {
+	UserID    string
+	Rev       int
+	Held      string // hash of the document held before
+	Published string // hash of the document the manifest lists
 }
 
 // Sync brings the local corpus up to the channel's current epoch.
 //
+// Every snapshot and patch is read through its manifest, signed by the
+// server key (pinned on first use, see WithServerKey): the manifest
+// says which documents a publication yields, so the client downloads
+// only the archive parts holding documents it lacks, and checks every
+// document it produces against the manifest's hash.
+//
 // From its current epoch, it repeatedly applies the patch with the
 // largest range starting there. A patch is applied only if the client
-// holds the base of every sjsonl patch in it (any retained revision
-// will do, not only the current one); otherwise the next smaller range
-// is tried. When no patch starts at the current epoch, or none applies,
+// holds the base of every sjsonl patch in it it still needs (any
+// retained revision will do, not only the current one), which the
+// manifest shows before any archive is fetched; otherwise the next
+// smaller range is tried. When no patch starts at the current epoch, or none applies,
 // it loads the newest snapshot and continues from that snapshot's
 // epoch. A fresh corpus starts from the newest snapshot, if there is
 // one.
@@ -71,9 +93,20 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	pin, err := c.resolvePin(idx)
+	if err != nil {
+		return nil, err
+	}
 	ch := idx.Channels[c.channel]
 	if ch == nil {
 		return nil, fmt.Errorf("client: server publishes no channel %q", c.channel)
+	}
+	pub := publisher{pin: pin, serverID: idx.ServerID}
+	if c.state.ServerKey != pin {
+		c.state.ServerKey = pin
+		if err := c.store.SaveState(c.state); err != nil {
+			return nil, err
+		}
 	}
 
 	res := &Result{FromEpoch: c.state.Epoch}
@@ -103,7 +136,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 
 	triedSnapshot := false
 	if c.state.Epoch == 0 && len(ch.Snapshots) > 0 {
-		if err := c.loadSnapshot(ctx, newestSnapshot(ch), changed); err != nil {
+		if err := c.loadSnapshot(ctx, pub, newestSnapshot(ch), changed, res); err != nil {
 			return nil, err
 		}
 		triedSnapshot = true
@@ -124,7 +157,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 		var missing *missingBaseError
 		advanced := false
 		for _, p := range patchesFrom(ch, c.state.Epoch) {
-			err := c.applyPatch(ctx, p, changed)
+			err := c.applyPatch(ctx, pub, p, changed, res)
 			if errors.As(err, &missing) {
 				continue // try a smaller range
 			}
@@ -151,7 +184,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 			}
 			return nil, d
 		}
-		if err := c.loadSnapshot(ctx, newestSnapshot(ch), changed); err != nil {
+		if err := c.loadSnapshot(ctx, pub, newestSnapshot(ch), changed, res); err != nil {
 			return nil, err
 		}
 		triedSnapshot = true
@@ -198,6 +231,13 @@ func patchesFrom(ch *channelIndex, epoch int) []patchInfo {
 	return ps
 }
 
+// publisher identifies the server whose manifests the client accepts:
+// the pinned key that must sign them and the id they must name.
+type publisher struct {
+	pin      string
+	serverID string
+}
+
 // missingBaseError means a patch entry's base document isn't held, so
 // the patch can't be applied; the caller tries another route.
 type missingBaseError struct {
@@ -209,39 +249,81 @@ func (e *missingBaseError) Error() string {
 	return fmt.Sprintf("client: patch base %s for user %s not held", e.base, e.userID)
 }
 
-// applyPatch fetches and applies one patch, all parts. It changes state
-// (heads, epoch) only in memory and only once the whole patch applied;
-// the caller commits.
-func (c *Client) applyPatch(ctx context.Context, p patchInfo, changed map[string]bool) error {
-	start, end := p.Range[0], p.Range[1]
-	heads := maps.Clone(c.state.Heads)
-	seen := map[string]bool{}
-	var removed []string
-	sawRemoved := false
+// holds reports whether the store holds the document a manifest entry
+// yields. A blob found by hash that isn't the current head is checked
+// to be that user's document at that rev, so a manifest can't pass off
+// one user's document as another's.
+func (c *Client) holds(e manifestEntry) (bool, error) {
+	data, err := c.store.GetBlob(e.Hash)
+	if errors.Is(err, ErrBlobNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if h, ok := c.state.Heads[e.ID]; ok && h.Hash == e.Hash && h.Rev == e.Rev {
+		return true, nil
+	}
+	if id, rev, err := docIdentity(data); err != nil || id != e.ID || rev != e.Rev {
+		return false, fmt.Errorf("client: manifest lists %s as user %s rev %d, but it isn't", e.Hash, e.ID, e.Rev)
+	}
+	return true, nil
+}
 
-	for part := 1; part <= p.Parts; part++ {
-		path := fmt.Sprintf("/v1/%s/patch-%d-%d_%d.tar.gz", c.channel, start, end, part)
-		err := c.fetchArchive(ctx, path, func(name string, r io.Reader) error {
-			if name == removedFile {
-				if part != 1 || sawRemoved {
-					return fmt.Errorf("%s outside part 1 or repeated", removedFile)
-				}
-				sawRemoved = true
-				data, err := io.ReadAll(r)
-				if err != nil {
-					return err
-				}
-				if err := json.Unmarshal(data, &removed); err != nil {
-					return fmt.Errorf("%s: %w", removedFile, err)
-				}
-				for _, id := range removed {
-					if !isUserID(id) {
-						return fmt.Errorf("%s lists invalid user id %q", removedFile, id)
-					}
-				}
-				return nil
+// noteEquivocation records a manifest entry that contradicts the
+// document held for the same user and rev.
+func (c *Client) noteEquivocation(e manifestEntry, res *Result) {
+	if h, ok := c.state.Heads[e.ID]; ok && h.Rev == e.Rev && h.Hash != e.Hash {
+		res.Equivocations = append(res.Equivocations, Equivocation{UserID: e.ID, Rev: e.Rev, Held: h.Hash, Published: e.Hash})
+	}
+}
+
+// plan sorts a manifest's entries into those already held, whose heads
+// it sets, and those to fetch, returned by user id along with the parts
+// that hold them. For patches it fails with a missingBaseError, before
+// anything is downloaded, if a needed entry's base isn't held.
+func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[string]manifestEntry, []int, error) {
+	need := map[string]manifestEntry{}
+	parts := map[int]bool{}
+
+	for _, id := range slices.Sorted(maps.Keys(m.entries)) {
+		e := m.entries[id]
+		c.noteEquivocation(e, res)
+
+		held, err := c.holds(e)
+		if err != nil {
+			return nil, nil, err
+		}
+		if held {
+			heads[id] = Head{Rev: e.Rev, Hash: e.Hash}
+			continue
+		}
+
+		if e.isPatch() {
+			if _, err := c.store.GetBlob(e.BaseHash); errors.Is(err, ErrBlobNotFound) {
+				return nil, nil, &missingBaseError{userID: id, base: e.BaseHash}
+			} else if err != nil {
+				return nil, nil, err
 			}
+		}
+		need[id] = e
+		parts[e.Part] = true
+	}
 
+	return need, slices.Sorted(maps.Keys(parts)), nil
+}
+
+// fetchEntries downloads the given parts of an archive and turns each
+// needed entry into a verified, stored document, setting its head.
+// Every entry must be listed in the manifest, in the part the manifest
+// says, and every needed entry must turn up.
+func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, need map[string]manifestEntry, parts []int, heads map[string]Head) error {
+	got := map[string]bool{}
+
+	for _, part := range parts {
+		seen := map[string]bool{}
+		path := fmt.Sprintf("%s_%d.tar.gz", prefix, part)
+		err := c.fetchArchive(ctx, path, func(name string, r io.Reader) error {
 			en, err := parseEntryName(name)
 			if err != nil {
 				return err
@@ -251,7 +333,14 @@ func (c *Client) applyPatch(ctx context.Context, p patchInfo, changed map[string
 			}
 			seen[en.userID] = true
 
-			if h, ok := heads[en.userID]; ok && h.Rev == en.rev {
+			e, ok := m.entries[en.userID]
+			if !ok {
+				return fmt.Errorf("entry %q is not in the manifest", name)
+			}
+			if e.Part != part || e.Rev != en.rev || e.isPatch() != en.isPatch || e.BaseRev != en.baseRev {
+				return fmt.Errorf("entry %q does not match its manifest entry", name)
+			}
+			if _, ok := need[en.userID]; !ok {
 				return nil // already held
 			}
 
@@ -259,33 +348,66 @@ func (c *Client) applyPatch(ctx context.Context, p patchInfo, changed map[string
 			if err != nil {
 				return err
 			}
-			h, err := c.applyEntry(en, data)
+			h, err := c.applyEntry(en, e, data)
 			if err != nil {
 				return err
 			}
 			heads[en.userID] = h
+			got[en.userID] = true
 			return nil
 		})
 		if err != nil {
-			var missing *missingBaseError
-			if errors.As(err, &missing) {
-				return missing
-			}
 			return err
 		}
 	}
 
-	for _, id := range removed {
-		if seen[id] {
-			return fmt.Errorf("client: patch %d-%d both removes and updates user %s", start, end, id)
+	for _, id := range slices.Sorted(maps.Keys(need)) {
+		if !got[id] {
+			return fmt.Errorf("client: %s: manifest lists user %s in part %d, but the archive lacks it", prefix, id, need[id].Part)
 		}
-		if _, ok := heads[id]; ok {
-			delete(heads, id)
+	}
+
+	return nil
+}
+
+// applyPatch applies one patch as its manifest directs: entries already
+// held are taken as is, and only the parts holding the rest are
+// downloaded (none, if the client holds everything). It changes state
+// (heads, epoch) only in memory and only once the whole patch applied;
+// the caller commits.
+func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, changed map[string]bool, res *Result) error {
+	start, end := p.Range[0], p.Range[1]
+	prefix := fmt.Sprintf("/v1/%s/patch-%d-%d", c.channel, start, end)
+
+	m, err := c.fetchManifest(ctx, fmt.Sprintf("/v1/%s/patch-manifest-%d-%d.sjsonl.gz", c.channel, start, end), pub.pin,
+		manifestWant{kind: "patch", serverID: pub.serverID, channel: c.channel, rng: p.Range, parts: p.Parts})
+	if err != nil {
+		return err
+	}
+
+	heads := maps.Clone(c.state.Heads)
+	need, parts, err := c.plan(m, heads, res)
+	if err != nil {
+		return err
+	}
+	if err := c.fetchEntries(ctx, prefix, m, need, parts, heads); err != nil {
+		var missing *missingBaseError
+		if errors.As(err, &missing) {
+			return missing
+		}
+		return err
+	}
+
+	for _, id := range m.removed {
+		delete(heads, id)
+	}
+	for id := range m.entries {
+		if heads[id] != c.state.Heads[id] {
 			changed[id] = true
 		}
 	}
-	for id := range seen {
-		if heads[id] != c.state.Heads[id] {
+	for _, id := range m.removed {
+		if _, ok := c.state.Heads[id]; ok {
 			changed[id] = true
 		}
 	}
@@ -296,20 +418,28 @@ func (c *Client) applyPatch(ctx context.Context, p patchInfo, changed map[string
 	return nil
 }
 
-// applyEntry turns one patch entry into a verified, stored document:
+// applyEntry turns one archive entry into a verified, stored document:
 // full docs stand alone, sjsonl patches apply to the base they name,
-// which may be any document the store holds.
-func (c *Client) applyEntry(en entryName, data []byte) (Head, error) {
+// which may be any document the store holds. The result must be the
+// document the manifest entry e lists.
+func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, error) {
 	ctl, err := peekControl(data)
 	if err != nil {
 		return Head{}, err
 	}
 
+	var h Head
 	switch {
 	case ctl.SJSONL == "doc" && !en.isPatch:
-		return c.ingestDoc(en, data)
+		h, err = c.ingestDoc(en, data)
+		if err != nil {
+			return Head{}, err
+		}
 
 	case ctl.SJSONL == "patch" && en.isPatch:
+		if ctl.Base != e.BaseHash {
+			return Head{}, fmt.Errorf("client: patch for user %s applies to %s, manifest says %s", en.userID, ctl.Base, e.BaseHash)
+		}
 		base, err := c.store.GetBlob(ctl.Base)
 		if errors.Is(err, ErrBlobNotFound) {
 			return Head{}, &missingBaseError{userID: en.userID, base: ctl.Base}
@@ -325,18 +455,22 @@ func (c *Client) applyEntry(en entryName, data []byte) (Head, error) {
 		if err != nil {
 			return Head{}, fmt.Errorf("client: applying patch for user %s: %w", en.userID, err)
 		}
-		h, err := c.ingestDoc(en, doc)
+		h, err = c.ingestDoc(en, doc)
 		if err != nil {
 			return Head{}, err
 		}
 		if ctl.Target != "" && ctl.Target != h.Hash {
 			return Head{}, fmt.Errorf("client: patch for user %s yields %s, header says %s", en.userID, h.Hash, ctl.Target)
 		}
-		return h, nil
 
 	default:
 		return Head{}, fmt.Errorf("client: entry for user %s is an sjsonl %q, but its name says otherwise", en.userID, ctl.SJSONL)
 	}
+
+	if h.Hash != e.Hash {
+		return Head{}, fmt.Errorf("client: entry for user %s yields %s, manifest says %s", en.userID, h.Hash, e.Hash)
+	}
+	return h, nil
 }
 
 // ingestDoc verifies a full document and stores it. This is the trust
@@ -361,54 +495,25 @@ func (c *Client) ingestDoc(en entryName, data []byte) (Head, error) {
 	return Head{Rev: doc.rev, Hash: doc.hash}, nil
 }
 
-// loadSnapshot replaces the corpus with a snapshot's and commits.
-// Entries for revisions already held are skipped without parsing.
-func (c *Client) loadSnapshot(ctx context.Context, snap snapshotInfo, changed map[string]bool) error {
-	heads := make(map[string]Head)
+// loadSnapshot replaces the corpus with a snapshot's and commits. Its
+// manifest lists every document in the channel at that epoch; only the
+// parts holding documents the store lacks are downloaded, which is also
+// how a snapshot repairs a corpus missing a document.
+func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap snapshotInfo, changed map[string]bool, res *Result) error {
+	m, err := c.fetchManifest(ctx, fmt.Sprintf("/v1/%s/snapshot-manifest-%d.sjsonl.gz", c.channel, snap.Epoch), pub.pin,
+		manifestWant{kind: "snapshot", serverID: pub.serverID, channel: c.channel, epoch: snap.Epoch, parts: snap.Parts})
+	if err != nil {
+		return err
+	}
 
-	for part := 1; part <= snap.Parts; part++ {
-		path := fmt.Sprintf("/v1/%s/snapshot-%d_%d.tar.gz", c.channel, snap.Epoch, part)
-		err := c.fetchArchive(ctx, path, func(name string, r io.Reader) error {
-			en, err := parseEntryName(name)
-			if err != nil {
-				return err
-			}
-			if en.isPatch {
-				return fmt.Errorf("snapshot holds a patch entry %q", name)
-			}
-			if _, dup := heads[en.userID]; dup {
-				return fmt.Errorf("multiple entries for user %s", en.userID)
-			}
-
-			// Skip revisions already held, unless the document itself
-			// has gone missing: a snapshot is also how a corpus
-			// repairs itself.
-			if h, ok := c.state.Heads[en.userID]; ok && h.Rev == en.rev {
-				if _, err := c.store.GetBlob(h.Hash); err == nil {
-					heads[en.userID] = h
-					return nil
-				}
-			}
-
-			data, err := io.ReadAll(r)
-			if err != nil {
-				return err
-			}
-			if ctl, err := peekControl(data); err != nil {
-				return err
-			} else if ctl.SJSONL != "doc" {
-				return fmt.Errorf("snapshot entry %q is an sjsonl %q", name, ctl.SJSONL)
-			}
-			h, err := c.ingestDoc(en, data)
-			if err != nil {
-				return err
-			}
-			heads[en.userID] = h
-			return nil
-		})
-		if err != nil {
-			return err
-		}
+	heads := make(map[string]Head, len(m.entries))
+	need, parts, err := c.plan(m, heads, res)
+	if err != nil {
+		return err
+	}
+	prefix := fmt.Sprintf("/v1/%s/snapshot-%d", c.channel, snap.Epoch)
+	if err := c.fetchEntries(ctx, prefix, m, need, parts, heads); err != nil {
+		return err
 	}
 
 	for id, h := range heads {

@@ -48,13 +48,13 @@ func TestReadArchive(t *testing.T) {
 	var got []string
 	err := readArchive(bytes.NewReader(makeArchive(t,
 		&tar.Header{Name: name, Size: 3},
-		&tar.Header{Name: removedFile, Size: 2},
+		&tar.Header{Name: "removed.json", Size: 2},
 	)), func(name string, r io.Reader) error {
 		got = append(got, name)
 		return nil // unread entries are skipped
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{name, removedFile}, got)
+	require.Equal(t, []string{name, "removed.json"}, got)
 
 	bad := map[string]*tar.Header{
 		"directory":     {Name: "dir/", Typeflag: tar.TypeDir},
@@ -94,7 +94,7 @@ func TestParseEntryName(t *testing.T) {
 		strings.ToUpper(testUID) + "-1.sjsonl",
 		"-1.sjsonl",
 		"../" + testUID + "-1.sjsonl",
-		removedFile,
+		"removed.json",
 	} {
 		_, err := parseEntryName(name)
 		require.Error(t, err, name)

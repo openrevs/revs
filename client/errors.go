@@ -12,6 +12,21 @@ var ErrNotFound = errors.New("client: no document for user")
 // store doesn't hold.
 var ErrBlobNotFound = errors.New("client: blob not found")
 
+// KeyChangedError means the server presented a key other than the
+// pinned one: its index advertises a different key, a manifest is
+// signed by one, or the configured key disagrees with the stored pin.
+// This is never auto-accepted: resolving it means deciding the server
+// identity really changed and starting from a fresh store, or pinning
+// the new key explicitly.
+type KeyChangedError struct {
+	Pinned string
+	Got    string
+}
+
+func (e *KeyChangedError) Error() string {
+	return fmt.Sprintf("client: server key changed (pinned %s, got %s)", e.Pinned, e.Got)
+}
+
 // DivergedError means no published route leads forward from the local
 // corpus: the channel has gone back in time, or a patch names a base
 // document the store doesn't hold and no snapshot resolves it. That is
