@@ -1,14 +1,16 @@
-package collection
+package collection_test
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
 	"testing"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/revstest"
 	"github.com/stretchr/testify/require"
 )
+
+func ptr[T any](v T) *T { return &v }
 
 // Everything pulled from several servers lives in the one database: a
 // document both servers publish is stored once, its reviews are listed
@@ -16,25 +18,18 @@ import (
 func TestServersShareDatabase(t *testing.T) {
 	ctx := context.Background()
 
+	network := revstest.NewNetwork(t)
+	srvs := []*revstest.Server{network.NewServer(), network.NewServer()}
 	var urls []string
-	var srvs []*revs.Server
-	for range 2 {
-		srv, err := revs.NewServer(t.TempDir())
-		require.NoError(t, err)
-		ts := httptest.NewServer(srv.Handler())
-		t.Cleanup(ts.Close)
-		srvs = append(srvs, srv)
-		urls = append(urls, ts.URL)
+	for _, s := range srvs {
+		urls = append(urls, s.URL)
 	}
 
 	// An author publishes a review to both servers.
-	author, err := Open(Options{DataDir: t.TempDir()})
+	author := network.NewAuthor()
+	m, _, err := author.AddMovie(ctx, collection.MovieInput{Title: "Alien", Year: ptr[int64](1979)})
 	require.NoError(t, err)
-	defer author.Close()
-	require.NoError(t, author.GenerateKey(ctx))
-	m, _, err := author.AddMovie(ctx, MovieInput{Title: "Alien", Year: ptr[int64](1979)})
-	require.NoError(t, err)
-	_, err = author.AddViewing(ctx, m.ID, ViewingInput{Rating: ptr[int64](5), Review: "Perfect."})
+	_, err = author.AddViewing(ctx, m.ID, collection.ViewingInput{Rating: ptr[int64](5), Review: "Perfect."})
 	require.NoError(t, err)
 	for _, u := range urls {
 		s, err := author.AddServer(ctx, u)
@@ -43,16 +38,12 @@ func TestServersShareDatabase(t *testing.T) {
 		require.NoError(t, err)
 	}
 	for _, srv := range srvs {
-		_, err := srv.Cut(ctx)
-		require.NoError(t, err)
+		srv.Cut()
 	}
 
 	// A reader pulls from both.
-	dir := t.TempDir()
-	reader, err := Open(Options{DataDir: dir})
-	require.NoError(t, err)
-	defer reader.Close()
-	require.NoError(t, reader.GenerateKey(ctx))
+	reader := network.NewAuthor()
+	dir := reader.DataDir()
 	var ids []int64
 	for _, u := range urls {
 		s, err := reader.AddServer(ctx, u)
@@ -70,14 +61,14 @@ func TestServersShareDatabase(t *testing.T) {
 
 	count := func(query string, args ...any) int {
 		var n int
-		require.NoError(t, reader.db.QueryRow(query, args...).Scan(&n))
+		require.NoError(t, collection.DB(reader).QueryRow(query, args...).Scan(&n))
 		return n
 	}
 	require.Equal(t, 1, count(`SELECT count(*) FROM corpus_docs`), "both servers' copy is stored once")
 	require.Equal(t, 2, count(`SELECT count(*) FROM corpus_feed_docs`))
 
-	movie := func() []OtherReview {
-		rm, _, err := reader.AddMovie(ctx, MovieInput{Title: "Alien", Year: ptr[int64](1979)})
+	movie := func() []collection.OtherReview {
+		rm, _, err := reader.AddMovie(ctx, collection.MovieInput{Title: "Alien", Year: ptr[int64](1979)})
 		require.NoError(t, err)
 		reviews, err := reader.OthersReviews(ctx, rm)
 		require.NoError(t, err)

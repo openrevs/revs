@@ -9,49 +9,46 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/fsstore"
 	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/revstest"
 	"github.com/stretchr/testify/require"
 )
 
-// startServer runs a real revs server over httptest. The client package
-// has no dependency on the server package; this test package uses both,
-// which is exactly the interop being tested.
-func startServer(t *testing.T) (*revs.Server, *httptest.Server) {
+// startServer runs a real revs server on a new in-process network. The
+// client package has no dependency on the server package; this test
+// package uses both, which is exactly the interop being tested.
+func startServer(t *testing.T) (*revstest.Network, *revstest.Server) {
 	t.Helper()
 
-	s, err := revs.NewServer(t.TempDir())
-	require.NoError(t, err)
-
-	ts := httptest.NewServer(s.Handler())
-	t.Cleanup(ts.Close)
-
-	return s, ts
+	network := revstest.NewNetwork(t)
+	return network, network.NewServer()
 }
 
 // newClientAt opens a client on an explicit store directory, so tests
-// can reopen the same store with a fresh client instance.
-func newClientAt(t *testing.T, url, dir string, opts ...client.Option) *client.Client {
+// can reopen the same store with a fresh client instance. Clients here
+// use fsstore, the store this package's tests exercise.
+func newClientAt(t *testing.T, network *revstest.Network, url, dir string, opts ...client.Option) *client.Client {
 	t.Helper()
 
 	store, err := fsstore.New(dir)
 	require.NoError(t, err)
 
+	opts = append([]client.Option{client.WithHTTPClient(network.HTTPClient())}, opts...)
 	return client.New(url, store, opts...)
 }
 
-func newClient(t *testing.T, url string, opts ...client.Option) *client.Client {
+func newClient(t *testing.T, network *revstest.Network, url string, opts ...client.Option) *client.Client {
 	t.Helper()
 
-	return newClientAt(t, url, t.TempDir(), opts...)
+	return newClientAt(t, network, url, t.TempDir(), opts...)
 }
 
 func newKey(t *testing.T) ed25519.PrivateKey {
@@ -98,13 +95,14 @@ func dataLines(t *testing.T, doc []byte) []byte {
 
 func TestPushSyncRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
 
-	publisher := newClient(t, ts.URL)
-	consumer := newClient(t, ts.URL)
+	publisher := newClient(t, network, ts.URL)
+	consumer := newClient(t, network, ts.URL)
 
 	// Sync against a server with nothing published is a clean no-op.
 	res, err := consumer.Sync(ctx)
@@ -179,11 +177,12 @@ func TestPushSyncRoundTrip(t *testing.T) {
 
 func TestUnchangedPushAfterSync(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
 
-	deviceA := newClient(t, ts.URL)
+	deviceA := newClient(t, network, ts.URL)
 	_, err := deviceA.Push(ctx, key, content(key, "Alien"))
 	require.NoError(t, err)
 	_, err = s.Cut(ctx)
@@ -191,7 +190,7 @@ func TestUnchangedPushAfterSync(t *testing.T) {
 
 	// Device B has never pushed. After syncing, re-pushing the pulled
 	// content is recognized as unchanged against the pulled head.
-	deviceB := newClient(t, ts.URL)
+	deviceB := newClient(t, network, ts.URL)
 	_, err = deviceB.Sync(ctx)
 	require.NoError(t, err)
 
@@ -206,11 +205,11 @@ func TestUnchangedPushAfterSync(t *testing.T) {
 
 func TestStalePush(t *testing.T) {
 	ctx := context.Background()
-	_, ts := startServer(t)
+	network, ts := startServer(t)
 	key := newKey(t)
 
-	deviceA := newClient(t, ts.URL)
-	deviceB := newClient(t, ts.URL)
+	deviceA := newClient(t, network, ts.URL)
+	deviceB := newClient(t, network, ts.URL)
 
 	pr, err := deviceA.Push(ctx, key, content(key, "Alien"))
 	require.NoError(t, err)
@@ -241,11 +240,11 @@ func TestStalePush(t *testing.T) {
 // rewriteIndex proxies to upstream, mutating index.json so retention
 // states the server itself never enters (v1 keeps everything) can be
 // exercised.
-func rewriteIndex(t *testing.T, upstream string, mutate func(map[string]any)) *httptest.Server {
+func rewriteIndex(t *testing.T, network *revstest.Network, upstream string, mutate func(map[string]any)) string {
 	t.Helper()
 
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp, err := http.Get(upstream + r.URL.Path)
+	return network.Handle(proxyName(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp, err := network.HTTPClient().Get(upstream + r.URL.Path)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -263,18 +262,23 @@ func rewriteIndex(t *testing.T, upstream string, mutate func(map[string]any)) *h
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body)
 	}))
-	t.Cleanup(proxy.Close)
+}
 
-	return proxy
+var proxies atomic.Int64
+
+// proxyName returns a new hostname for a proxy.
+func proxyName() string {
+	return fmt.Sprintf("proxy%d.test", proxies.Add(1))
 }
 
 func TestSnapshotBootstrap(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
 
-	publisher := newClient(t, ts.URL)
+	publisher := newClient(t, network, ts.URL)
 	for i, title := range []string{"Alien", "Heat", "Ran"} {
 		_, err := publisher.Push(ctx, key, content(key, title))
 		require.NoError(t, err)
@@ -285,11 +289,11 @@ func TestSnapshotBootstrap(t *testing.T) {
 
 	// Claim the early patches are gone: a fresh consumer must bootstrap
 	// from the snapshot (cut at epoch 1), then chain the rest.
-	proxy := rewriteIndex(t, ts.URL, func(idx map[string]any) {
+	proxy := rewriteIndex(t, network, ts.URL, func(idx map[string]any) {
 		idx["oldest_retained_epoch"] = 2
 	})
 
-	consumer := newClient(t, proxy.URL)
+	consumer := newClient(t, network, proxy)
 	res, err := consumer.Sync(ctx)
 	require.NoError(t, err)
 	require.True(t, res.Bootstrapped)
@@ -303,7 +307,7 @@ func TestSnapshotBootstrap(t *testing.T) {
 
 	// A consumer stuck before the horizon re-bootstraps the same way.
 	behindDir := t.TempDir()
-	behind := newClientAt(t, ts.URL, behindDir)
+	behind := newClientAt(t, network, ts.URL, behindDir)
 	_, err = behind.Sync(ctx)
 	require.NoError(t, err)
 
@@ -312,10 +316,10 @@ func TestSnapshotBootstrap(t *testing.T) {
 	_, err = s.Cut(ctx)
 	require.NoError(t, err)
 
-	proxy2 := rewriteIndex(t, ts.URL, func(idx map[string]any) {
+	proxy2 := rewriteIndex(t, network, ts.URL, func(idx map[string]any) {
 		idx["oldest_retained_epoch"] = 6
 	})
-	stale := newClientAt(t, proxy2.URL, behindDir)
+	stale := newClientAt(t, network, proxy2, behindDir)
 	res, err = stale.Sync(ctx)
 	require.NoError(t, err)
 	require.True(t, res.Bootstrapped)
@@ -327,13 +331,14 @@ func TestSnapshotBootstrap(t *testing.T) {
 // multiple chunk files (tiny chunk target: one chunk per member).
 func TestChunkedSnapshotBootstrap(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 	s.SetSnapshotChunkSize(1)
 
 	// Three users published before the first cut, so the epoch-1
 	// snapshot spans three chunks.
 	keys := []ed25519.PrivateKey{newKey(t), newKey(t), newKey(t)}
-	publisher := newClient(t, ts.URL)
+	publisher := newClient(t, network, ts.URL)
 	for i, key := range keys {
 		_, err := publisher.Push(ctx, key, content(key, fmt.Sprintf("Movie %d", i)))
 		require.NoError(t, err)
@@ -342,11 +347,11 @@ func TestChunkedSnapshotBootstrap(t *testing.T) {
 	require.NoError(t, err)
 
 	// Force a fresh consumer through the snapshot path.
-	proxy := rewriteIndex(t, ts.URL, func(idx map[string]any) {
+	proxy := rewriteIndex(t, network, ts.URL, func(idx map[string]any) {
 		idx["oldest_retained_epoch"] = 2
 	})
 
-	consumer := newClient(t, proxy.URL)
+	consumer := newClient(t, network, proxy)
 	res, err := consumer.Sync(ctx)
 	require.NoError(t, err)
 	require.True(t, res.Bootstrapped)
@@ -361,7 +366,8 @@ func TestChunkedSnapshotBootstrap(t *testing.T) {
 
 func TestDivergenceAndRebootstrap(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
 
@@ -369,7 +375,7 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	// patch (with its base-hash check) rather than a full doc.
 	titles := manyTitles(40)
 
-	publisher := newClient(t, ts.URL)
+	publisher := newClient(t, network, ts.URL)
 	_, err := publisher.Push(ctx, key, content(key, titles...))
 	require.NoError(t, err)
 	_, err = s.Cut(ctx)
@@ -379,7 +385,7 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	store, err := fsstore.New(storeDir)
 	require.NoError(t, err)
 
-	consumer := client.New(ts.URL, store)
+	consumer := client.New(ts.URL, store, client.WithHTTPClient(network.HTTPClient()))
 	_, err = consumer.Sync(ctx)
 	require.NoError(t, err)
 
@@ -398,7 +404,7 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 	state.Heads[uid] = head
 	require.NoError(t, store.SaveState(state))
 
-	tampered := client.New(ts.URL, store)
+	tampered := client.New(ts.URL, store, client.WithHTTPClient(network.HTTPClient()))
 	_, err = tampered.Sync(ctx)
 	var diverged *client.DivergedError
 	require.ErrorAs(t, err, &diverged)
@@ -419,17 +425,18 @@ func TestDivergenceAndRebootstrap(t *testing.T) {
 
 func TestKeyPinning(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
+	network, ts := startServer(t)
+	s := ts.Server()
 	key := newKey(t)
 
-	publisher := newClient(t, ts.URL)
+	publisher := newClient(t, network, ts.URL)
 	_, err := publisher.Push(ctx, key, content(key, "Alien"))
 	require.NoError(t, err)
 	_, err = s.Cut(ctx)
 	require.NoError(t, err)
 
 	// Fetch the server's real key from its index.
-	resp, err := http.Get(ts.URL + "/v1/index.json")
+	resp, err := network.HTTPClient().Get(ts.URL + "/v1/index.json")
 	require.NoError(t, err)
 	var idx struct {
 		ServerKey string `json:"server_key"`
@@ -439,7 +446,7 @@ func TestKeyPinning(t *testing.T) {
 
 	// Pre-pinning the correct key works.
 	realKey := mustParseKey(t, idx.ServerKey)
-	pinned := newClient(t, ts.URL, client.WithServerKey(realKey))
+	pinned := newClient(t, network, ts.URL, client.WithServerKey(realKey))
 	_, err = pinned.Sync(ctx)
 	require.NoError(t, err)
 
@@ -447,7 +454,7 @@ func TestKeyPinning(t *testing.T) {
 	wrongPub, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	misPinned := newClient(t, ts.URL, client.WithServerKey(wrongPub))
+	misPinned := newClient(t, network, ts.URL, client.WithServerKey(wrongPub))
 	_, err = misPinned.Sync(ctx)
 	var keyChanged *client.KeyChangedError
 	require.ErrorAs(t, err, &keyChanged)
@@ -455,20 +462,20 @@ func TestKeyPinning(t *testing.T) {
 	// A store that TOFU'd the real key refuses a conflicting
 	// configured key outright.
 	tofuDir := t.TempDir()
-	tofu := newClientAt(t, ts.URL, tofuDir)
+	tofu := newClientAt(t, network, ts.URL, tofuDir)
 	_, err = tofu.Sync(ctx)
 	require.NoError(t, err)
 
-	conflicted := newClientAt(t, ts.URL, tofuDir, client.WithServerKey(wrongPub))
+	conflicted := newClientAt(t, network, ts.URL, tofuDir, client.WithServerKey(wrongPub))
 	_, err = conflicted.Sync(ctx)
 	require.ErrorAs(t, err, &keyChanged)
 }
 
 func TestPushContentValidation(t *testing.T) {
 	ctx := context.Background()
-	_, ts := startServer(t)
+	network, ts := startServer(t)
 	key := newKey(t)
-	c := newClient(t, ts.URL)
+	c := newClient(t, network, ts.URL)
 
 	// No id line.
 	_, err := c.Push(ctx, key, []byte(`{"name":"Alien"}`+"\n"))
@@ -496,11 +503,11 @@ func mustParseKey(t *testing.T, s string) ed25519.PublicKey {
 
 // recordUploads proxies to upstream, recording the sjsonl type ("doc"
 // or "patch") of each upload body.
-func recordUploads(t *testing.T, upstream string) (*httptest.Server, *[]string) {
+func recordUploads(t *testing.T, network *revstest.Network, upstream string) (string, *[]string) {
 	t.Helper()
 
 	var kinds []string
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	proxy := network.Handle(proxyName(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 
@@ -515,7 +522,7 @@ func recordUploads(t *testing.T, upstream string) (*httptest.Server, *[]string) 
 
 		req, err := http.NewRequest(r.Method, upstream+r.URL.Path, bytes.NewReader(body))
 		require.NoError(t, err)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := network.HTTPClient().Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -524,21 +531,21 @@ func recordUploads(t *testing.T, upstream string) (*httptest.Server, *[]string) 
 		w.WriteHeader(resp.StatusCode)
 		w.Write(respBody)
 	}))
-	t.Cleanup(proxy.Close)
 
 	return proxy, &kinds
 }
 
 func TestPatchPush(t *testing.T) {
 	ctx := context.Background()
-	s, ts := startServer(t)
-	proxy, kinds := recordUploads(t, ts.URL)
+	network, ts := startServer(t)
+	s := ts.Server()
+	proxy, kinds := recordUploads(t, network, ts.URL)
 
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
 	titles := manyTitles(50)
 
-	deviceA := newClient(t, proxy.URL)
+	deviceA := newClient(t, network, proxy)
 
 	// The first push has no base, so it is a full document; later pushes
 	// patch against the previous push.
@@ -552,7 +559,7 @@ func TestPatchPush(t *testing.T) {
 	_, err = s.Cut(ctx)
 	require.NoError(t, err)
 
-	consumer := newClient(t, ts.URL)
+	consumer := newClient(t, network, ts.URL)
 	_, err = consumer.Sync(ctx)
 	require.NoError(t, err)
 	doc, err := consumer.Document(uid)
@@ -561,7 +568,7 @@ func TestPatchPush(t *testing.T) {
 	require.Equal(t, pr.Hash, doc.Hash)
 
 	// A device that has only pulled patches against its synced head.
-	deviceB := newClient(t, proxy.URL)
+	deviceB := newClient(t, network, proxy)
 	_, err = deviceB.Sync(ctx)
 	require.NoError(t, err)
 	*kinds = nil
@@ -582,10 +589,10 @@ func TestPatchPush(t *testing.T) {
 
 // uploadDoc posts a signed document straight to a server, standing in
 // for one server pulling it from another.
-func uploadDoc(t *testing.T, url string, doc []byte) {
+func uploadDoc(t *testing.T, network *revstest.Network, url string, doc []byte) {
 	t.Helper()
 
-	resp, err := http.Post(url+"/upload", "application/jsonl", bytes.NewReader(doc))
+	resp, err := network.HTTPClient().Post(url+"/upload", "application/jsonl", bytes.NewReader(doc))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -593,10 +600,10 @@ func uploadDoc(t *testing.T, url string, doc []byte) {
 
 func TestPushAcrossServers(t *testing.T) {
 	ctx := context.Background()
-	_, tsA := startServer(t)
-	_, tsB := startServer(t)
-	proxyA, kindsA := recordUploads(t, tsA.URL)
-	proxyB, kindsB := recordUploads(t, tsB.URL)
+	network := revstest.NewNetwork(t)
+	tsA, tsB := network.NewServer(), network.NewServer()
+	proxyA, kindsA := recordUploads(t, network, tsA.URL)
+	proxyB, kindsB := recordUploads(t, network, tsB.URL)
 
 	key := newKey(t)
 	uid := client.UserID(key.Public().(ed25519.PublicKey))
@@ -606,8 +613,8 @@ func TestPushAcrossServers(t *testing.T) {
 	hs, err := fsstore.New(t.TempDir())
 	require.NoError(t, err)
 	history := client.NewHistory(hs)
-	toA := newClient(t, proxyA.URL, client.WithHistory(history))
-	toB := newClient(t, proxyB.URL, client.WithHistory(history))
+	toA := newClient(t, network, proxyA, client.WithHistory(history))
+	toB := newClient(t, network, proxyB, client.WithHistory(history))
 
 	pr, err := toA.Push(ctx, key, content(key, titles[:40]...))
 	require.NoError(t, err)
@@ -628,7 +635,7 @@ func TestPushAcrossServers(t *testing.T) {
 	// A pulls rev 2 from B behind our back.
 	rev2, err := history.Version(uid, pr.Hash)
 	require.NoError(t, err)
-	uploadDoc(t, tsA.URL, rev2.Data)
+	uploadDoc(t, network, tsA.URL, rev2.Data)
 
 	// Pushing rev 3 to A: the patch against rev 1 is refused, A reports
 	// rev 2, which the history holds, so the second patch is against it.
@@ -642,7 +649,7 @@ func TestPushAcrossServers(t *testing.T) {
 	// B pulls rev 3 from A; pushing the same content to B finds it there.
 	rev3, err := history.Version(uid, pr.Hash)
 	require.NoError(t, err)
-	uploadDoc(t, tsB.URL, rev3.Data)
+	uploadDoc(t, network, tsB.URL, rev3.Data)
 
 	*kindsB = nil
 	pr, err = toB.Push(ctx, key, content(key, titles[:42]...))
