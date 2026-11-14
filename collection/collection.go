@@ -56,6 +56,9 @@ type Options struct {
 	DataDir string
 	// WikidataURL overrides the Wikidata API endpoint (for tests).
 	WikidataURL string
+	// HTTPClient is used to talk to servers. Tests use it to reach
+	// in-process servers (see the revstest package).
+	HTTPClient *http.Client
 }
 
 type Collection struct {
@@ -106,6 +109,11 @@ func Open(opts Options) (*Collection, error) {
 		return nil, err
 	}
 
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 60 * time.Second}
+	}
+
 	watch, err := db.Conn(context.Background())
 	if err != nil {
 		db.Close()
@@ -118,7 +126,7 @@ func Open(opts Options) (*Collection, error) {
 		q:        localdb.New(db),
 		corpus:   corpus,
 		versions: client.NewHistory(corpus),
-		http:     &http.Client{Timeout: 60 * time.Second},
+		http:     httpClient,
 		wikidata: &wikidata{baseURL: wdURL, http: &http.Client{Timeout: 15 * time.Second}},
 		remotes:  map[int64]*remote{},
 		syncMu:   make(chan struct{}, 1),
