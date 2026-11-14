@@ -28,10 +28,11 @@ const (
 )
 
 type Server struct {
-	dal  domain.DAL
-	db   *DB
-	docs BlobStore
-	key  ed25519.PrivateKey
+	dal    domain.DAL
+	db     *DB
+	docs   BlobStore
+	corpus *SQLiteStore // docs, plus the feeds pulled from upstreams
+	key    ed25519.PrivateKey
 
 	// pubDir is the root of the published static file tree (contains v1/).
 	pubDir string
@@ -41,6 +42,9 @@ type Server struct {
 	snapshotChunkSize int
 
 	cutMu sync.Mutex
+
+	upstreams []*upstream
+	pullMu    sync.Mutex
 }
 
 func NewServer(dataDir string) (*Server, error) {
@@ -63,6 +67,7 @@ func NewServer(dataDir string) (*Server, error) {
 		dal:               domain.NewDAL(db.DB),
 		db:                db,
 		docs:              docs,
+		corpus:            docs,
 		key:               key,
 		pubDir:            filepath.Join(dataDir, "public"),
 		cutInterval:       DefaultCutInterval,
@@ -90,6 +95,11 @@ type ServerOptions struct {
 	CutInterval       time.Duration
 	SnapshotEvery     int
 	SnapshotChunkSize int
+
+	// Pull lists the URLs of upstream servers to pull documents from,
+	// every PullInterval.
+	Pull         []string
+	PullInterval time.Duration
 }
 
 func Start2(dataDir string, opts ServerOptions) {
@@ -107,12 +117,22 @@ func Start2(dataDir string, opts ServerOptions) {
 	if opts.SnapshotChunkSize > 0 {
 		server.snapshotChunkSize = opts.SnapshotChunkSize
 	}
+	for _, u := range opts.Pull {
+		if err := server.AddUpstream(u); err != nil {
+			log.Fatal(err)
+		}
+	}
+	pullInterval := opts.PullInterval
+	if pullInterval <= 0 {
+		pullInterval = DefaultPullInterval
+	}
 	listen := opts.Listen
 	if listen == "" {
 		listen = DefaultServerListen
 	}
 
 	server.startCutter(context.Background())
+	server.startPuller(context.Background(), pullInterval)
 
 	log.Printf("server listening on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))

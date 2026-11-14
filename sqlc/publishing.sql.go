@@ -11,8 +11,8 @@ import (
 )
 
 const addDocument = `-- name: AddDocument :exec
-INSERT INTO documents (userid, rev, hash, size, received_time)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO documents (userid, rev, hash, size, received_time, source)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type AddDocumentParams struct {
@@ -21,6 +21,7 @@ type AddDocumentParams struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
+	Source       string
 }
 
 func (q *Queries) AddDocument(ctx context.Context, arg AddDocumentParams) error {
@@ -30,6 +31,7 @@ func (q *Queries) AddDocument(ctx context.Context, arg AddDocumentParams) error 
 		arg.Hash,
 		arg.Size,
 		arg.ReceivedTime,
+		arg.Source,
 	)
 	return err
 }
@@ -89,7 +91,7 @@ func (q *Queries) AllEpochs(ctx context.Context) ([]Epoch, error) {
 }
 
 const documentByUserRev = `-- name: DocumentByUserRev :one
-SELECT userid, rev, hash, size, received_time FROM documents WHERE userid = ? AND rev = ?
+SELECT userid, rev, hash, size, received_time, source FROM documents WHERE userid = ? AND rev = ?
 `
 
 type DocumentByUserRevParams struct {
@@ -106,12 +108,13 @@ func (q *Queries) DocumentByUserRev(ctx context.Context, arg DocumentByUserRevPa
 		&i.Hash,
 		&i.Size,
 		&i.ReceivedTime,
+		&i.Source,
 	)
 	return i, err
 }
 
 const latestDocumentByUser = `-- name: LatestDocumentByUser :one
-SELECT userid, rev, hash, size, received_time FROM documents WHERE userid = ? ORDER BY rev DESC LIMIT 1
+SELECT userid, rev, hash, size, received_time, source FROM documents WHERE userid = ? ORDER BY rev DESC LIMIT 1
 `
 
 func (q *Queries) LatestDocumentByUser(ctx context.Context, userid string) (Document, error) {
@@ -123,12 +126,13 @@ func (q *Queries) LatestDocumentByUser(ctx context.Context, userid string) (Docu
 		&i.Hash,
 		&i.Size,
 		&i.ReceivedTime,
+		&i.Source,
 	)
 	return i, err
 }
 
 const latestDocuments = `-- name: LatestDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time FROM documents d
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
 WHERE d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid)
 ORDER BY d.userid
 `
@@ -148,6 +152,7 @@ func (q *Queries) LatestDocuments(ctx context.Context) ([]Document, error) {
 			&i.Hash,
 			&i.Size,
 			&i.ReceivedTime,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -179,7 +184,7 @@ func (q *Queries) LatestPatchEpoch(ctx context.Context) (Epoch, error) {
 }
 
 const publishedDocuments = `-- name: PublishedDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time FROM documents d
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
 JOIN published_head p ON p.userid = d.userid AND p.rev = d.rev
 ORDER BY d.received_time DESC, d.userid
 `
@@ -199,6 +204,7 @@ func (q *Queries) PublishedDocuments(ctx context.Context) ([]Document, error) {
 			&i.Hash,
 			&i.Size,
 			&i.ReceivedTime,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}

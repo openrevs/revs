@@ -91,11 +91,15 @@ type serverCmd struct {
 	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	Pull              []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval      time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (serverCmd) Help() string {
 	return "Accepts signed ratings documents and periodically publishes them as an " +
-		"epoch, with a full snapshot every --snapshot-every epochs. The data " +
+		"epoch, with a full snapshot every --snapshot-every epochs. With --pull, it " +
+		"also pulls the documents other servers publish and republishes the ones " +
+		"newer than its own, remembering which server each came from. The data " +
 		"directory holds the server's identity key, its document store and the " +
 		"published tree; back it up to keep the server's identity."
 }
@@ -118,6 +122,8 @@ type clientServerCmd struct {
 	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
 	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
+	Pull              []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval      time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (clientServerCmd) Help() string {
@@ -231,6 +237,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 			"default_cut_interval":        revs.DefaultCutInterval.String(),
 			"default_snapshot_every":      strconv.Itoa(revs.DefaultSnapshotEvery),
 			"default_snapshot_chunk_size": strconv.Itoa(revs.DefaultSnapshotChunkSize),
+			"default_pull_interval":       revs.DefaultPullInterval.String(),
 		},
 	)
 }
@@ -255,6 +262,8 @@ func main() {
 			CutInterval:       CLI.Server.CutInterval,
 			SnapshotEvery:     CLI.Server.SnapshotEvery,
 			SnapshotChunkSize: CLI.Server.SnapshotChunkSize,
+			Pull:              CLI.Server.Pull,
+			PullInterval:      CLI.Server.PullInterval,
 		})
 	case "client":
 		ensureDir(CLI.Client.DataDir)
@@ -266,6 +275,8 @@ func main() {
 			CutInterval:       CLI.ClientServer.CutInterval,
 			SnapshotEvery:     CLI.ClientServer.SnapshotEvery,
 			SnapshotChunkSize: CLI.ClientServer.SnapshotChunkSize,
+			Pull:              CLI.ClientServer.Pull,
+			PullInterval:      CLI.ClientServer.PullInterval,
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
