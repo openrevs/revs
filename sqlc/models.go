@@ -13,6 +13,28 @@ type AppDatum struct {
 	Value string
 }
 
+type Artifact struct {
+	Channel    string
+	Kind       string
+	StartEpoch int
+	EndEpoch   int
+	Parts      int
+	Created    time.Time
+}
+
+type ChannelChange struct {
+	Channel string
+	Epoch   int
+	Userid  string
+	Rev     *int
+}
+
+type ChannelEpoch struct {
+	Channel string
+	Epoch   int
+	Created time.Time
+}
+
 type Document struct {
 	Userid       string
 	Rev          int
@@ -20,18 +42,6 @@ type Document struct {
 	Size         int
 	ReceivedTime time.Time
 	Source       string
-}
-
-type Epoch struct {
-	Epoch        int
-	Kind         string
-	ManifestHash string
-	Created      time.Time
-}
-
-type PublishedHead struct {
-	Userid string
-	Rev    int
 }
 
 type Rating struct {

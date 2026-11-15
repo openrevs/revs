@@ -51,9 +51,9 @@ func TestServerPull(t *testing.T) {
 	assert.Equal(t, upTS.URL, got[bob.ID].Source)
 
 	// Pulled documents are republished like uploaded ones.
-	epoch, err := down.Cut(ctx)
+	epochs, err := down.Cut(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, epoch)
+	assert.Equal(t, 1, epochs[ChannelMain])
 
 	// Bob uploads a newer revision directly downstream; the upstream's
 	// older one must not displace it.

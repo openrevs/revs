@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/openrevs/revs/sqlc"
 )
@@ -20,13 +21,12 @@ func documentFromSqlc(d sqlc.Document) *Document {
 	}
 }
 
-func epochFromSqlc(e sqlc.Epoch) *Epoch {
-	return &Epoch{
-		Epoch:        e.Epoch,
-		Kind:         e.Kind,
-		ManifestHash: e.ManifestHash,
-		Created:      e.Created,
+func documentsFromSqlc(rows []sqlc.Document) []*Document {
+	docs := make([]*Document, 0, len(rows))
+	for _, row := range rows {
+		docs = append(docs, documentFromSqlc(row))
 	}
+	return docs
 }
 
 func (d *DAL) AddDocument(ctx context.Context, doc *Document) error {
@@ -72,86 +72,59 @@ func (d *DAL) LatestDocuments(ctx context.Context) ([]*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	docs := make([]*Document, 0, len(rows))
-	for _, row := range rows {
-		docs = append(docs, documentFromSqlc(row))
-	}
-
-	return docs, nil
+	return documentsFromSqlc(rows), nil
 }
 
-// PublishedDocuments returns the documents referenced by published_head,
-// newest-first by received time.
-func (d *DAL) PublishedDocuments(ctx context.Context) ([]*Document, error) {
-	rows, err := d.q.PublishedDocuments(ctx)
+// LatestDirectDocuments returns each user's latest document that was
+// uploaded to this server directly.
+func (d *DAL) LatestDirectDocuments(ctx context.Context) ([]*Document, error) {
+	rows, err := d.q.LatestDirectDocuments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return documentsFromSqlc(rows), nil
+}
+
+// ChannelDocuments returns the documents a channel holds at an epoch,
+// newest-first by received time. Epoch 0 is the empty channel.
+func (d *DAL) ChannelDocuments(ctx context.Context, channel string, epoch int) ([]*Document, error) {
+	rows, err := d.q.ChannelDocuments(ctx, sqlc.ChannelDocumentsParams{Channel: channel, Epoch: epoch})
+	if err != nil {
+		return nil, err
+	}
+	return documentsFromSqlc(rows), nil
+}
+
+// LatestChannelEpoch returns a channel's current epoch, 0 before its
+// first cut.
+func (d *DAL) LatestChannelEpoch(ctx context.Context, channel string) (int, error) {
+	return d.q.LatestChannelEpoch(ctx, channel)
+}
+
+func (d *DAL) ChannelArtifacts(ctx context.Context, channel string) ([]*Artifact, error) {
+	rows, err := d.q.ChannelArtifacts(ctx, channel)
 	if err != nil {
 		return nil, err
 	}
 
-	docs := make([]*Document, 0, len(rows))
+	arts := make([]*Artifact, 0, len(rows))
 	for _, row := range rows {
-		docs = append(docs, documentFromSqlc(row))
+		arts = append(arts, &Artifact{
+			Channel: row.Channel,
+			Kind:    row.Kind,
+			Start:   row.StartEpoch,
+			End:     row.EndEpoch,
+			Parts:   row.Parts,
+			Created: row.Created,
+		})
 	}
 
-	return docs, nil
+	return arts, nil
 }
 
-// PublishedHeads returns the published rev per user, keyed by user id.
-func (d *DAL) PublishedHeads(ctx context.Context) (map[string]int, error) {
-	rows, err := d.q.PublishedHeads(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	heads := make(map[string]int, len(rows))
-	for _, row := range rows {
-		heads[row.Userid] = row.Rev
-	}
-
-	return heads, nil
-}
-
-// LatestPatchEpoch returns the most recent patch epoch, or nil if no cut
-// has happened yet.
-func (d *DAL) LatestPatchEpoch(ctx context.Context) (*Epoch, error) {
-	e, err := d.q.LatestPatchEpoch(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return epochFromSqlc(e), nil
-}
-
-func (d *DAL) Epochs(ctx context.Context) ([]*Epoch, error) {
-	rows, err := d.q.AllEpochs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	epochs := make([]*Epoch, 0, len(rows))
-	for _, row := range rows {
-		epochs = append(epochs, epochFromSqlc(row))
-	}
-
-	return epochs, nil
-}
-
-func (d *DAL) AddEpoch(ctx context.Context, e *Epoch) error {
-	return d.q.AddEpoch(ctx, sqlc.AddEpochParams{
-		Epoch:        e.Epoch,
-		Kind:         e.Kind,
-		ManifestHash: e.ManifestHash,
-		Created:      e.Created,
-	})
-}
-
-// RecordCut atomically records a patch epoch and advances the published
-// heads it shipped.
-func (d *DAL) RecordCut(ctx context.Context, e *Epoch, heads []PublishedHead) error {
+// RecordCut atomically commits a channel epoch: the epoch itself, the
+// membership changes it makes, and the artifacts published with it.
+func (d *DAL) RecordCut(ctx context.Context, channel string, epoch int, created time.Time, changes []ChannelChange, artifacts []*Artifact) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -160,21 +133,35 @@ func (d *DAL) RecordCut(ctx context.Context, e *Epoch, heads []PublishedHead) er
 
 	q := d.q.WithTx(tx)
 
-	if err := q.AddEpoch(ctx, sqlc.AddEpochParams{
-		Epoch:        e.Epoch,
-		Kind:         e.Kind,
-		ManifestHash: e.ManifestHash,
-		Created:      e.Created,
+	if err := q.AddChannelEpoch(ctx, sqlc.AddChannelEpochParams{
+		Channel: channel,
+		Epoch:   epoch,
+		Created: created,
 	}); err != nil {
 		return fmt.Errorf("recording epoch: %w", err)
 	}
 
-	for _, h := range heads {
-		if err := q.UpsertPublishedHead(ctx, sqlc.UpsertPublishedHeadParams{
-			Userid: h.Userid,
-			Rev:    h.Rev,
+	for _, c := range changes {
+		if err := q.AddChannelChange(ctx, sqlc.AddChannelChangeParams{
+			Channel: channel,
+			Epoch:   epoch,
+			Userid:  c.Userid,
+			Rev:     c.Rev,
 		}); err != nil {
-			return fmt.Errorf("updating published head: %w", err)
+			return fmt.Errorf("recording channel change: %w", err)
+		}
+	}
+
+	for _, a := range artifacts {
+		if err := q.AddArtifact(ctx, sqlc.AddArtifactParams{
+			Channel:    channel,
+			Kind:       a.Kind,
+			StartEpoch: a.Start,
+			EndEpoch:   a.End,
+			Parts:      a.Parts,
+			Created:    a.Created,
+		}); err != nil {
+			return fmt.Errorf("recording artifact: %w", err)
 		}
 	}
 

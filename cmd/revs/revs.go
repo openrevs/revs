@@ -86,22 +86,25 @@ func (keygenCmd) Help() string {
 }
 
 type serverCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	Listen            string        `help:"HTTP listen address" default:"${default_server_listen}"`
-	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	Pull              []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
-	PullInterval      time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
+	DataDir       string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
+	Listen        string        `help:"HTTP listen address" default:"${default_server_listen}"`
+	CutInterval   time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
+	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
+	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (serverCmd) Help() string {
 	return "Accepts signed ratings documents and periodically publishes them as an " +
-		"epoch, with a full snapshot every --snapshot-every epochs. With --pull, it " +
-		"also pulls the documents other servers publish and republishes the ones " +
-		"newer than its own, remembering which server each came from. The data " +
-		"directory holds the server's identity key, its document store and the " +
-		"published tree; back it up to keep the server's identity."
+		"epoch on each of its channels, with a full snapshot every " +
+		"--snapshot-every epochs and patches compacted at the --compact-every " +
+		"boundaries. With --pull, it also pulls the documents other servers " +
+		"publish and republishes the ones newer than its own, remembering which " +
+		"server each came from. The data directory holds the server's identity " +
+		"key, its document store and the published tree; back it up to keep the " +
+		"server's identity."
 }
 
 type clientCmd struct {
@@ -115,15 +118,16 @@ func (clientCmd) Help() string {
 }
 
 type clientServerCmd struct {
-	DataDir           string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	ServerListen      string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
-	ClientListen      string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
-	Demo              bool          `help:"Insert demo data"`
-	CutInterval       time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-	SnapshotEvery     int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-	SnapshotChunkSize int           `help:"Snapshot chunk target size in bytes" default:"${default_snapshot_chunk_size}"`
-	Pull              []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
-	PullInterval      time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
+	DataDir       string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
+	ServerListen  string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
+	ClientListen  string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
+	Demo          bool          `help:"Insert demo data"`
+	CutInterval   time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
+	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
+	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
+	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
+	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (clientServerCmd) Help() string {
@@ -230,14 +234,15 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.UsageOnError(),
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
-			"revs_home":                   revsHome(),
-			"default_server_listen":       revs.DefaultServerListen,
-			"default_client_listen":       revs.DefaultClientListen,
-			"default_ui_listen":           ui.DefaultListen,
-			"default_cut_interval":        revs.DefaultCutInterval.String(),
-			"default_snapshot_every":      strconv.Itoa(revs.DefaultSnapshotEvery),
-			"default_snapshot_chunk_size": strconv.Itoa(revs.DefaultSnapshotChunkSize),
-			"default_pull_interval":       revs.DefaultPullInterval.String(),
+			"revs_home":              revsHome(),
+			"default_server_listen":  revs.DefaultServerListen,
+			"default_client_listen":  revs.DefaultClientListen,
+			"default_ui_listen":      ui.DefaultListen,
+			"default_cut_interval":   revs.DefaultCutInterval.String(),
+			"default_snapshot_every": strconv.Itoa(revs.DefaultSnapshotEvery),
+			"default_part_size":      strconv.Itoa(revs.DefaultPartSize),
+			"default_compact_every":  joinInts(revs.DefaultCompactEvery),
+			"default_pull_interval":  revs.DefaultPullInterval.String(),
 		},
 	)
 }
@@ -258,12 +263,13 @@ func main() {
 	case "server":
 		ensureDir(CLI.Server.DataDir)
 		revs.Start2(CLI.Server.DataDir, revs.ServerOptions{
-			Listen:            CLI.Server.Listen,
-			CutInterval:       CLI.Server.CutInterval,
-			SnapshotEvery:     CLI.Server.SnapshotEvery,
-			SnapshotChunkSize: CLI.Server.SnapshotChunkSize,
-			Pull:              CLI.Server.Pull,
-			PullInterval:      CLI.Server.PullInterval,
+			Listen:        CLI.Server.Listen,
+			CutInterval:   CLI.Server.CutInterval,
+			SnapshotEvery: CLI.Server.SnapshotEvery,
+			PartSize:      CLI.Server.PartSize,
+			CompactEvery:  nonNil(CLI.Server.CompactEvery),
+			Pull:          CLI.Server.Pull,
+			PullInterval:  CLI.Server.PullInterval,
 		})
 	case "client":
 		ensureDir(CLI.Client.DataDir)
@@ -271,12 +277,13 @@ func main() {
 	case "clientserver":
 		ensureDir(CLI.ClientServer.DataDir)
 		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
-			Listen:            CLI.ClientServer.ServerListen,
-			CutInterval:       CLI.ClientServer.CutInterval,
-			SnapshotEvery:     CLI.ClientServer.SnapshotEvery,
-			SnapshotChunkSize: CLI.ClientServer.SnapshotChunkSize,
-			Pull:              CLI.ClientServer.Pull,
-			PullInterval:      CLI.ClientServer.PullInterval,
+			Listen:        CLI.ClientServer.ServerListen,
+			CutInterval:   CLI.ClientServer.CutInterval,
+			SnapshotEvery: CLI.ClientServer.SnapshotEvery,
+			PartSize:      CLI.ClientServer.PartSize,
+			CompactEvery:  nonNil(CLI.ClientServer.CompactEvery),
+			Pull:          CLI.ClientServer.Pull,
+			PullInterval:  CLI.ClientServer.PullInterval,
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":
@@ -451,4 +458,21 @@ func addNewMovie() error {
 	fmt.Printf("--- m dump:\n%s\n\n", string(d))
 
 	return nil
+}
+
+func joinInts(ns []int) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// nonNil turns a nil slice (an empty flag value) into an empty one, so
+// that an explicitly empty --compact-every disables compaction.
+func nonNil(ns []int) []int {
+	if ns == nil {
+		return []int{}
+	}
+	return ns
 }

@@ -268,7 +268,7 @@ func (s *serverScreen) banner(width int) string {
 			"Or press p now to push anyway, replacing the server's copy with yours.\n\n"+
 			"A just-pushed revision only appears after the server publishes its next epoch, so the merge may have to wait.", s.conflict)
 	case problemDiverged:
-		text = "Your copy of this server's data no longer matches what it publishes. This can mean local corruption or that the server rewrote its history.\n\n" +
+		text = "Your copy of this server's data no longer matches what it publishes. No published update applies to it, which can mean local corruption or that the server rewrote its history.\n\n" +
 			"Press b to re-download from a snapshot."
 	case problemKeyChanged:
 		text = "The server is signing with a different key than the one pinned on first contact. Either the server's identity changed or something is intercepting it.\n\n" +

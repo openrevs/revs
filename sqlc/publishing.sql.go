@@ -10,6 +10,68 @@ import (
 	"time"
 )
 
+const addArtifact = `-- name: AddArtifact :exec
+INSERT INTO artifacts (channel, kind, start_epoch, end_epoch, parts, created)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type AddArtifactParams struct {
+	Channel    string
+	Kind       string
+	StartEpoch int
+	EndEpoch   int
+	Parts      int
+	Created    time.Time
+}
+
+func (q *Queries) AddArtifact(ctx context.Context, arg AddArtifactParams) error {
+	_, err := q.db.ExecContext(ctx, addArtifact,
+		arg.Channel,
+		arg.Kind,
+		arg.StartEpoch,
+		arg.EndEpoch,
+		arg.Parts,
+		arg.Created,
+	)
+	return err
+}
+
+const addChannelChange = `-- name: AddChannelChange :exec
+INSERT INTO channel_changes (channel, epoch, userid, rev) VALUES (?, ?, ?, ?)
+`
+
+type AddChannelChangeParams struct {
+	Channel string
+	Epoch   int
+	Userid  string
+	Rev     *int
+}
+
+func (q *Queries) AddChannelChange(ctx context.Context, arg AddChannelChangeParams) error {
+	_, err := q.db.ExecContext(ctx, addChannelChange,
+		arg.Channel,
+		arg.Epoch,
+		arg.Userid,
+		arg.Rev,
+	)
+	return err
+}
+
+const addChannelEpoch = `-- name: AddChannelEpoch :exec
+INSERT INTO channel_epochs (channel, epoch, created) VALUES (?, ?, ?)
+`
+
+type AddChannelEpochParams struct {
+	Channel string
+	Epoch   int
+	Created time.Time
+}
+
+func (q *Queries) AddChannelEpoch(ctx context.Context, arg AddChannelEpochParams) error {
+	_, err := q.db.ExecContext(ctx, addChannelEpoch, arg.Channel, arg.Epoch, arg.Created)
+	return err
+}
+
 const addDocument = `-- name: AddDocument :exec
 INSERT INTO documents (userid, rev, hash, size, received_time, source)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -36,46 +98,74 @@ func (q *Queries) AddDocument(ctx context.Context, arg AddDocumentParams) error 
 	return err
 }
 
-const addEpoch = `-- name: AddEpoch :exec
-INSERT INTO epochs (epoch, kind, manifest_hash, created)
-VALUES (?, ?, ?, ?)
+const channelArtifacts = `-- name: ChannelArtifacts :many
+SELECT channel, kind, start_epoch, end_epoch, parts, created FROM artifacts WHERE channel = ?
+ORDER BY kind, start_epoch, end_epoch
 `
 
-type AddEpochParams struct {
-	Epoch        int
-	Kind         string
-	ManifestHash string
-	Created      time.Time
-}
-
-func (q *Queries) AddEpoch(ctx context.Context, arg AddEpochParams) error {
-	_, err := q.db.ExecContext(ctx, addEpoch,
-		arg.Epoch,
-		arg.Kind,
-		arg.ManifestHash,
-		arg.Created,
-	)
-	return err
-}
-
-const allEpochs = `-- name: AllEpochs :many
-SELECT epoch, kind, manifest_hash, created FROM epochs ORDER BY epoch, kind
-`
-
-func (q *Queries) AllEpochs(ctx context.Context) ([]Epoch, error) {
-	rows, err := q.db.QueryContext(ctx, allEpochs)
+func (q *Queries) ChannelArtifacts(ctx context.Context, channel string) ([]Artifact, error) {
+	rows, err := q.db.QueryContext(ctx, channelArtifacts, channel)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Epoch
+	var items []Artifact
 	for rows.Next() {
-		var i Epoch
+		var i Artifact
 		if err := rows.Scan(
-			&i.Epoch,
+			&i.Channel,
 			&i.Kind,
-			&i.ManifestHash,
+			&i.StartEpoch,
+			&i.EndEpoch,
+			&i.Parts,
 			&i.Created,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelDocuments = `-- name: ChannelDocuments :many
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM channel_changes c
+JOIN documents d ON d.userid = c.userid AND d.rev = c.rev
+WHERE c.channel = ?1
+  AND c.epoch = (
+    SELECT MAX(m.epoch) FROM channel_changes m
+    WHERE m.channel = c.channel AND m.userid = c.userid AND m.epoch <= ?2
+  )
+ORDER BY d.received_time DESC, d.userid
+`
+
+type ChannelDocumentsParams struct {
+	Channel string
+	Epoch   int
+}
+
+// The documents a channel holds at an epoch, newest-first.
+func (q *Queries) ChannelDocuments(ctx context.Context, arg ChannelDocumentsParams) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, channelDocuments, arg.Channel, arg.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.Userid,
+			&i.Rev,
+			&i.Hash,
+			&i.Size,
+			&i.ReceivedTime,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -111,6 +201,54 @@ func (q *Queries) DocumentByUserRev(ctx context.Context, arg DocumentByUserRevPa
 		&i.Source,
 	)
 	return i, err
+}
+
+const latestChannelEpoch = `-- name: LatestChannelEpoch :one
+SELECT CAST(COALESCE(MAX(epoch), 0) AS integer) FROM channel_epochs WHERE channel = ?
+`
+
+func (q *Queries) LatestChannelEpoch(ctx context.Context, channel string) (int, error) {
+	row := q.db.QueryRowContext(ctx, latestChannelEpoch, channel)
+	var column_1 int
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const latestDirectDocuments = `-- name: LatestDirectDocuments :many
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
+WHERE d.source = ''
+  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.source = '')
+ORDER BY d.userid
+`
+
+func (q *Queries) LatestDirectDocuments(ctx context.Context) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, latestDirectDocuments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.Userid,
+			&i.Rev,
+			&i.Hash,
+			&i.Size,
+			&i.ReceivedTime,
+			&i.Source,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const latestDocumentByUser = `-- name: LatestDocumentByUser :one
@@ -165,98 +303,4 @@ func (q *Queries) LatestDocuments(ctx context.Context) ([]Document, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-const latestPatchEpoch = `-- name: LatestPatchEpoch :one
-SELECT epoch, kind, manifest_hash, created FROM epochs WHERE kind = 'patch' ORDER BY epoch DESC LIMIT 1
-`
-
-func (q *Queries) LatestPatchEpoch(ctx context.Context) (Epoch, error) {
-	row := q.db.QueryRowContext(ctx, latestPatchEpoch)
-	var i Epoch
-	err := row.Scan(
-		&i.Epoch,
-		&i.Kind,
-		&i.ManifestHash,
-		&i.Created,
-	)
-	return i, err
-}
-
-const publishedDocuments = `-- name: PublishedDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
-JOIN published_head p ON p.userid = d.userid AND p.rev = d.rev
-ORDER BY d.received_time DESC, d.userid
-`
-
-func (q *Queries) PublishedDocuments(ctx context.Context) ([]Document, error) {
-	rows, err := q.db.QueryContext(ctx, publishedDocuments)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Document
-	for rows.Next() {
-		var i Document
-		if err := rows.Scan(
-			&i.Userid,
-			&i.Rev,
-			&i.Hash,
-			&i.Size,
-			&i.ReceivedTime,
-			&i.Source,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const publishedHeads = `-- name: PublishedHeads :many
-SELECT userid, rev FROM published_head
-`
-
-func (q *Queries) PublishedHeads(ctx context.Context) ([]PublishedHead, error) {
-	rows, err := q.db.QueryContext(ctx, publishedHeads)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PublishedHead
-	for rows.Next() {
-		var i PublishedHead
-		if err := rows.Scan(&i.Userid, &i.Rev); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const upsertPublishedHead = `-- name: UpsertPublishedHead :exec
-INSERT INTO published_head (userid, rev) VALUES (?, ?)
-ON CONFLICT (userid) DO UPDATE SET rev = excluded.rev
-`
-
-type UpsertPublishedHeadParams struct {
-	Userid string
-	Rev    int
-}
-
-func (q *Queries) UpsertPublishedHead(ctx context.Context, arg UpsertPublishedHeadParams) error {
-	_, err := q.db.ExecContext(ctx, upsertPublishedHead, arg.Userid, arg.Rev)
-	return err
 }

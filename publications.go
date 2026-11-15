@@ -12,7 +12,8 @@ import (
 )
 
 // Publications is where a server writes its published static file tree
-// (index.json, epochs/, snapshots/) and serves it from, under /v1/.
+// (index.json and a directory of archives and manifests per channel)
+// and serves it from, under /v1/.
 // Names are slash-separated and relative to the v1 root.
 type Publications interface {
 	// WriteFile publishes data at name, replacing any previous file.

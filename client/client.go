@@ -1,8 +1,9 @@
 // Package client is a generic consumer of the revs publishing scheme
-// (wip-docs/publishing.md in the website repo). It pulls the published
-// corpus — epochs, patches, snapshots, manifests — verifying everything
-// against the server's signing key, and pushes signed documents with the
-// revision discipline the protocol asks of clients.
+// (specs/publishing-v2.md in the website repo). It follows one of a
+// server's channels, pulling its snapshots and patches as their signed
+// manifests direct and verifying every document against its author's
+// signature, and pushes signed
+// documents with the revision discipline the protocol asks of clients.
 //
 // The package traffics in raw signed sjsonl documents and knows nothing
 // about their contents; domain parsing layers on top. Local state lives
@@ -15,7 +16,6 @@ package client
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -32,6 +32,7 @@ type Client struct {
 	baseURL string
 	http    *http.Client
 	store   Store
+	channel string
 	pin     ed25519.PublicKey // optional pre-pinned server key
 	history *History
 
@@ -56,6 +57,13 @@ func WithHistory(h *History) Option {
 	return func(c *Client) { c.history = h }
 }
 
+// WithChannel selects the channel to follow instead of DefaultChannel
+// ("main"). A peer server might follow "direct", for example. Switching
+// a store to another channel rebuilds its corpus on the next Sync.
+func WithChannel(name string) Option {
+	return func(c *Client) { c.channel = name }
+}
+
 // WithServerKey pre-pins the server's public key, obtained out of band.
 // Without it, the key is pinned trust-on-first-use from the server's
 // index. Either way, a later mismatch is a hard KeyChangedError.
@@ -68,6 +76,7 @@ func New(baseURL string, store Store, opts ...Option) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    http.DefaultClient,
 		store:   store,
+		channel: DefaultChannel,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -134,7 +143,13 @@ func (c *Client) Documents() iter.Seq2[*Document, error] {
 	}
 }
 
-// Epoch returns the last fully synced epoch, 0 before any sync.
+// Channel returns the name of the channel the client follows.
+func (c *Client) Channel() string {
+	return c.channel
+}
+
+// Epoch returns the last fully synced epoch of the channel, 0 before
+// any sync.
 func (c *Client) Epoch() (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -180,26 +195,36 @@ func (c *Client) ensureState() error {
 }
 
 // resolvePin returns the base64 server key every manifest must be signed
-// with: the stored pin, else the configured key, else (trust on first
-// use) the key the index advertises. Callers hold c.mu.
-func (c *Client) resolvePin(idx *serverIndex) (string, error) {
+// with, checking the index agrees: the stored pin, else the configured
+// key, else (trust on first use) the key the index advertises. Callers
+// hold c.mu.
+func (c *Client) resolvePin(idx *publicationIndex) (string, error) {
+	pub, err := keys.ParsePublic(idx.ServerKey)
+	if err != nil {
+		return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
+	}
+	if id := keys.UserID(pub); id != idx.ServerID {
+		return "", fmt.Errorf("client: index server id %s does not match its key (%s)", idx.ServerID, id)
+	}
+
+	advertised := keys.EncodePublic(pub)
+
 	pin := ""
 	if c.pin != nil {
 		pin = keys.EncodePublic(c.pin)
 	}
-
 	if stored := c.state.ServerKey; stored != "" {
 		if pin != "" && pin != stored {
-			return "", &KeyChangedError{Pinned: pin, Got: stored}
+			return "", &KeyChangedError{Pinned: stored, Got: pin}
 		}
 		pin = stored
 	}
-
 	if pin == "" {
-		if _, err := keys.ParsePublic(idx.ServerKey); err != nil {
-			return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
-		}
-		pin = idx.ServerKey
+		pin = advertised
+	}
+
+	if advertised != pin {
+		return "", &KeyChangedError{Pinned: pin, Got: advertised}
 	}
 
 	return pin, nil
@@ -223,5 +248,3 @@ func (c *Client) fetch(ctx context.Context, path string) ([]byte, error) {
 
 	return io.ReadAll(resp.Body)
 }
-
-var errNoSnapshot = errors.New("client: bootstrap required but server lists no snapshots")

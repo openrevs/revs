@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -40,8 +41,11 @@ func TestConfigDefaults(t *testing.T) {
 	if c.Server.SnapshotEvery != revs.DefaultSnapshotEvery {
 		t.Errorf("snapshot every = %d, want %d", c.Server.SnapshotEvery, revs.DefaultSnapshotEvery)
 	}
-	if c.Server.SnapshotChunkSize != revs.DefaultSnapshotChunkSize {
-		t.Errorf("snapshot chunk size = %d, want %d", c.Server.SnapshotChunkSize, revs.DefaultSnapshotChunkSize)
+	if c.Server.PartSize != revs.DefaultPartSize {
+		t.Errorf("part size = %d, want %d", c.Server.PartSize, revs.DefaultPartSize)
+	}
+	if !slices.Equal(c.Server.CompactEvery, revs.DefaultCompactEvery) {
+		t.Errorf("compact every = %v, want %v", c.Server.CompactEvery, revs.DefaultCompactEvery)
 	}
 }
 
@@ -53,6 +57,7 @@ server:
   listen: ":9999"
   cut-interval: 15m
   snapshot-every: 5
+  compact-every: [10, 100]
 `, dataDir)
 	c := parseWith(t, cfg, "server")
 	if c.Server.DataDir != dataDir {
@@ -67,9 +72,12 @@ server:
 	if c.Server.SnapshotEvery != 5 {
 		t.Errorf("snapshot every = %d, want 5", c.Server.SnapshotEvery)
 	}
+	if !slices.Equal(c.Server.CompactEvery, []int{10, 100}) {
+		t.Errorf("compact every = %v, want [10 100]", c.Server.CompactEvery)
+	}
 	// Unset keys keep their defaults.
-	if c.Server.SnapshotChunkSize != revs.DefaultSnapshotChunkSize {
-		t.Errorf("snapshot chunk size = %d, want default", c.Server.SnapshotChunkSize)
+	if c.Server.PartSize != revs.DefaultPartSize {
+		t.Errorf("part size = %d, want default", c.Server.PartSize)
 	}
 }
 

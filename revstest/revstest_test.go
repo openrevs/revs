@@ -174,7 +174,7 @@ func TestServerRestart(t *testing.T) {
 	require.Equal(t, 2, doc.Rev)
 
 	// The snapshot cadence came through the restart.
-	_, err = s.Publications.ReadFile("snapshots/2/manifest")
+	_, err = s.Publications.ReadFile("main/snapshot-manifest-2.sjsonl.gz")
 	require.NoError(t, err)
 }
 

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,26 +21,36 @@ const (
 	DefaultCutInterval   = time.Hour
 	DefaultSnapshotEvery = 100
 
-	// DefaultSnapshotChunkSize targets 256 MiB chunks: comfortably under
+	// DefaultPartSize targets 256 MiB archive parts: comfortably under
 	// CDN cacheable-object caps and a sane unit for parallel fetch/retry.
-	DefaultSnapshotChunkSize = 256 << 20
+	DefaultPartSize = 256 << 20
 
 	DefaultServerListen = ":1323"
 )
+
+// DefaultCompactEvery is the default set of aligned compaction
+// intervals, in epochs: with hourly cuts, daily and weekly.
+var DefaultCompactEvery = []int{24, 168}
 
 type Server struct {
 	dal    domain.DAL
 	db     *DB
 	docs   BlobStore
 	corpus *SQLiteStore // docs, plus the feeds pulled from upstreams
-	key    ed25519.PrivateKey
+	// key is the server's identity: it signs every manifest, and its
+	// derived id is how consumers track the server.
+	key ed25519.PrivateKey
 
 	// pub holds the published static file tree (served under /v1/).
 	pub Publications
 
-	cutInterval       time.Duration
-	snapshotEvery     int
-	snapshotChunkSize int
+	channels      []channel
+	cutInterval   time.Duration
+	snapshotEvery int
+	partSize      int
+	// compactEvery lists the aligned intervals, in epochs, at which
+	// patches are compacted into coarser ranges.
+	compactEvery []int
 
 	cutMu sync.Mutex
 
@@ -52,10 +63,13 @@ type Server struct {
 // ServerOptions overrides server tunables. Zero values keep the
 // defaults.
 type ServerOptions struct {
-	Listen            string
-	CutInterval       time.Duration
-	SnapshotEvery     int
-	SnapshotChunkSize int
+	Listen        string
+	CutInterval   time.Duration
+	SnapshotEvery int
+	PartSize      int
+	// CompactEvery replaces the compaction intervals when non-nil; an
+	// empty, non-nil slice disables compaction.
+	CompactEvery []int
 
 	// Pull lists the URLs of upstream servers to pull documents from,
 	// every PullInterval.
@@ -120,21 +134,23 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 	}
 
 	s := &Server{
-		dal:               domain.NewDAL(cfg.DB.DB),
-		db:                cfg.DB,
-		docs:              docs,
-		corpus:            docs,
-		key:               cfg.Key,
-		pub:               cfg.Publications,
-		httpClient:        cfg.HTTPClient,
-		cutInterval:       DefaultCutInterval,
-		snapshotEvery:     DefaultSnapshotEvery,
-		snapshotChunkSize: DefaultSnapshotChunkSize,
-		pullInterval:      DefaultPullInterval,
+		dal:           domain.NewDAL(cfg.DB.DB),
+		db:            cfg.DB,
+		docs:          docs,
+		corpus:        docs,
+		key:           cfg.Key,
+		pub:           cfg.Publications,
+		httpClient:    cfg.HTTPClient,
+		cutInterval:   DefaultCutInterval,
+		snapshotEvery: DefaultSnapshotEvery,
+		partSize:      DefaultPartSize,
+		compactEvery:  slices.Clone(DefaultCompactEvery),
+		pullInterval:  DefaultPullInterval,
 	}
 	if s.httpClient == nil {
 		s.httpClient = &http.Client{Timeout: upstreamTimeout}
 	}
+	s.channels = s.defaultChannels()
 
 	if cfg.CutInterval > 0 {
 		s.cutInterval = cfg.CutInterval
@@ -142,8 +158,11 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 	if cfg.SnapshotEvery > 0 {
 		s.snapshotEvery = cfg.SnapshotEvery
 	}
-	if cfg.SnapshotChunkSize > 0 {
-		s.snapshotChunkSize = cfg.SnapshotChunkSize
+	if cfg.PartSize > 0 {
+		s.partSize = cfg.PartSize
+	}
+	if cfg.CompactEvery != nil {
+		s.compactEvery = slices.Clone(cfg.CompactEvery)
 	}
 	if cfg.PullInterval > 0 {
 		s.pullInterval = cfg.PullInterval
@@ -186,11 +205,21 @@ func (s *Server) PublicKey() ed25519.PublicKey {
 	return s.key.Public().(ed25519.PublicKey)
 }
 
-// SetSnapshotChunkSize overrides the snapshot chunk target size in
-// bytes. It exists so tests can exercise multi-chunk snapshots without
-// gigabytes of fixture data; the default suits production.
-func (s *Server) SetSnapshotChunkSize(n int) {
-	s.snapshotChunkSize = n
+// SetPartSize overrides the archive part target size in bytes. It
+// exists so tests can exercise multi-part archives without gigabytes of
+// fixture data; the default suits production.
+func (s *Server) SetPartSize(n int) {
+	s.partSize = n
+}
+
+// SetCompactEvery overrides the patch compaction intervals.
+func (s *Server) SetCompactEvery(intervals ...int) {
+	s.compactEvery = slices.Clone(intervals)
+}
+
+// SetSnapshotEvery overrides the snapshot cadence, in epochs.
+func (s *Server) SetSnapshotEvery(n int) {
+	s.snapshotEvery = n
 }
 
 // Handler returns the server's HTTP handler, for embedding or tests.

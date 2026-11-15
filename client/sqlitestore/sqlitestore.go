@@ -40,10 +40,10 @@ CREATE TABLE IF NOT EXISTS corpus_docs (
 
 -- A feed's sync state; a feed without a row has never saved state.
 CREATE TABLE IF NOT EXISTS corpus_feeds (
-	feed          TEXT PRIMARY KEY,
-	epoch         INTEGER NOT NULL,
-	manifest_hash TEXT NOT NULL,
-	server_key    TEXT NOT NULL
+	feed       TEXT PRIMARY KEY,
+	channel    TEXT NOT NULL,
+	epoch      INTEGER NOT NULL,
+	server_key TEXT NOT NULL
 );
 -- Which feeds hold which documents, so removing a feed can drop the
 -- documents no other feed holds.
@@ -208,7 +208,7 @@ func (s *Store) PutBlob(hash string, data []byte) error {
 func (s *Store) GetBlob(hash string) ([]byte, error) {
 	data, err := getBlob(s.d.db, hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("sqlitestore: no blob %s", hash)
+		return nil, fmt.Errorf("sqlitestore: blob %s: %w", hash, client.ErrBlobNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sqlitestore: blob %s: %w", hash, err)
@@ -228,8 +228,8 @@ func (s *Store) LoadState() (*client.State, error) {
 		Heads: map[string]client.Head{},
 		Push:  map[string]client.PushState{},
 	}
-	err = tx.QueryRow(`SELECT epoch, manifest_hash, server_key FROM corpus_feeds WHERE feed = ?`, s.feed).
-		Scan(&state.Epoch, &state.ManifestHash, &state.ServerKey)
+	err = tx.QueryRow(`SELECT channel, epoch, server_key FROM corpus_feeds WHERE feed = ?`, s.feed).
+		Scan(&state.Channel, &state.Epoch, &state.ServerKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // no state saved yet
 	}
@@ -275,7 +275,7 @@ func (s *Store) LoadState() (*client.State, error) {
 }
 
 // SaveState replaces the feed's whole persisted state in one
-// transaction, keeping epoch, chain hash, and heads consistent as the
+// transaction, keeping channel, epoch, pin, and heads consistent as the
 // Store contract requires.
 func (s *Store) SaveState(state *client.State) error {
 	tx, err := s.d.db.Begin()
@@ -284,10 +284,10 @@ func (s *Store) SaveState(state *client.State) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`INSERT INTO corpus_feeds (feed, epoch, manifest_hash, server_key) VALUES (?, ?, ?, ?)
-		ON CONFLICT (feed) DO UPDATE SET epoch = excluded.epoch,
-			manifest_hash = excluded.manifest_hash, server_key = excluded.server_key`,
-		s.feed, state.Epoch, state.ManifestHash, state.ServerKey); err != nil {
+	if _, err := tx.Exec(`INSERT INTO corpus_feeds (feed, channel, epoch, server_key) VALUES (?, ?, ?, ?)
+		ON CONFLICT (feed) DO UPDATE SET channel = excluded.channel, epoch = excluded.epoch,
+			server_key = excluded.server_key`,
+		s.feed, state.Channel, state.Epoch, state.ServerKey); err != nil {
 		return err
 	}
 
@@ -299,6 +299,13 @@ func (s *Store) SaveState(state *client.State) error {
 	for id, h := range state.Heads {
 		if _, err := tx.Exec(`INSERT INTO corpus_heads (feed, userid, rev, hash) VALUES (?, ?, ?, ?)`,
 			s.feed, id, h.Rev, h.Hash); err != nil {
+			return err
+		}
+		// A feed can take a document another feed stored without
+		// putting it itself (its manifest showed it already held), so
+		// claim every head here too; otherwise removing the other feed
+		// would drop it.
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO corpus_feed_docs (feed, hash) VALUES (?, ?)`, s.feed, h.Hash); err != nil {
 			return err
 		}
 	}

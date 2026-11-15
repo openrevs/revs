@@ -13,24 +13,36 @@ SELECT d.* FROM documents d
 WHERE d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid)
 ORDER BY d.userid;
 
--- name: PublishedDocuments :many
+-- name: LatestDirectDocuments :many
 SELECT d.* FROM documents d
-JOIN published_head p ON p.userid = d.userid AND p.rev = d.rev
+WHERE d.source = ''
+  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.source = '')
+ORDER BY d.userid;
+
+-- name: ChannelDocuments :many
+-- The documents a channel holds at an epoch, newest-first.
+SELECT d.* FROM channel_changes c
+JOIN documents d ON d.userid = c.userid AND d.rev = c.rev
+WHERE c.channel = sqlc.arg(channel)
+  AND c.epoch = (
+    SELECT MAX(m.epoch) FROM channel_changes m
+    WHERE m.channel = c.channel AND m.userid = c.userid AND m.epoch <= sqlc.arg(epoch)
+  )
 ORDER BY d.received_time DESC, d.userid;
 
--- name: PublishedHeads :many
-SELECT * FROM published_head;
+-- name: AddChannelChange :exec
+INSERT INTO channel_changes (channel, epoch, userid, rev) VALUES (?, ?, ?, ?);
 
--- name: UpsertPublishedHead :exec
-INSERT INTO published_head (userid, rev) VALUES (?, ?)
-ON CONFLICT (userid) DO UPDATE SET rev = excluded.rev;
+-- name: LatestChannelEpoch :one
+SELECT CAST(COALESCE(MAX(epoch), 0) AS integer) FROM channel_epochs WHERE channel = ?;
 
--- name: AddEpoch :exec
-INSERT INTO epochs (epoch, kind, manifest_hash, created)
-VALUES (?, ?, ?, ?);
+-- name: AddChannelEpoch :exec
+INSERT INTO channel_epochs (channel, epoch, created) VALUES (?, ?, ?);
 
--- name: LatestPatchEpoch :one
-SELECT * FROM epochs WHERE kind = 'patch' ORDER BY epoch DESC LIMIT 1;
+-- name: AddArtifact :exec
+INSERT INTO artifacts (channel, kind, start_epoch, end_epoch, parts, created)
+VALUES (?, ?, ?, ?, ?, ?);
 
--- name: AllEpochs :many
-SELECT * FROM epochs ORDER BY epoch, kind;
+-- name: ChannelArtifacts :many
+SELECT * FROM artifacts WHERE channel = ?
+ORDER BY kind, start_epoch, end_epoch;

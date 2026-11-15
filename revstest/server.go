@@ -131,16 +131,17 @@ func (s *Server) PublicKey() ed25519.PublicKey {
 	return s.Key.Public().(ed25519.PublicKey)
 }
 
-// Cut cuts an epoch, failing the test on error. It returns the epoch
-// cut, or 0 if nothing changed.
+// Cut cuts an epoch on every channel, failing the test on error. It
+// returns the epoch cut on the main channel (the one clients follow by
+// default), or 0 if it didn't change.
 func (s *Server) Cut() int {
 	s.net.t.Helper()
 
-	epoch, err := s.Server().Cut(context.Background())
+	epochs, err := s.Server().Cut(context.Background())
 	if err != nil {
 		s.net.t.Fatalf("revstest: cutting %s: %v", s.Host, err)
 	}
-	return epoch
+	return epochs[revs.ChannelMain]
 }
 
 // Down makes the server unreachable until Up.

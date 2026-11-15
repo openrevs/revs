@@ -16,7 +16,7 @@
 {{end}}
 {{if .Diverged}}
 <div class="flash flash-error">
-  <p><strong>Your copy of this server's data no longer matches what it publishes.</strong> This can mean local corruption or that the server rewrote its history.</p>
+  <p><strong>Your copy of this server's data no longer matches what it publishes.</strong> No published update applies to it, which can mean local corruption or that the server rewrote its history.</p>
   <form method="post" action="/servers/{{.Server.ID}}/rebootstrap"><button type="submit">Re-download from a snapshot</button></form>
 </div>
 {{end}}

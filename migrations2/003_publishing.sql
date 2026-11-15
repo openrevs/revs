@@ -1,7 +1,8 @@
 -- +goose Up
 
--- The server's accepted-document ledger. Documents themselves are
--- content-addressed blobs on disk; this table holds metadata only.
+-- The server's accepted-document ledger. Document blobs live in the
+-- line store; this table holds metadata only. (004 adds source, which
+-- records whether the document was uploaded directly or pulled.)
 CREATE TABLE documents
 (
     userid text NOT NULL
@@ -12,24 +13,38 @@ CREATE TABLE documents
     , PRIMARY KEY (userid, rev)
 );
 
--- The cut ledger. Patch cuts advance the epoch counter; snapshots
--- materialize the corpus at an existing epoch (same number, kind
--- 'snapshot').
-CREATE TABLE epochs
+-- Each channel's epochs. Epochs are per channel and consecutive.
+CREATE TABLE channel_epochs
 (
-    epoch integer NOT NULL
-    , kind text NOT NULL
-    , manifest_hash text NOT NULL
+    channel text NOT NULL
+    , epoch integer NOT NULL
     , created datetime NOT NULL
-    , PRIMARY KEY (epoch, kind)
+    , PRIMARY KEY (channel, epoch)
 );
 
--- What the last cut shipped per user; diffs run published rev -> latest
--- accepted rev.
-CREATE TABLE published_head
+-- Channel membership history: from epoch on, the channel holds rev of
+-- the user's document, or nothing if rev is NULL (removed). The state of
+-- a channel at any epoch is each user's latest row at or before it.
+CREATE TABLE channel_changes
 (
-    userid text PRIMARY KEY NOT NULL
-    , rev integer NOT NULL
+    channel text NOT NULL
+    , epoch integer NOT NULL
+    , userid text NOT NULL
+    , rev integer
+    , PRIMARY KEY (channel, userid, epoch)
+);
+
+-- Published snapshots and patches. A snapshot has start = end = its
+-- epoch.
+CREATE TABLE artifacts
+(
+    channel text NOT NULL
+    , kind text NOT NULL
+    , start_epoch integer NOT NULL
+    , end_epoch integer NOT NULL
+    , parts integer NOT NULL
+    , created datetime NOT NULL
+    , PRIMARY KEY (channel, kind, start_epoch, end_epoch)
 );
 
 DROP TABLE uploads;
@@ -39,5 +54,6 @@ DROP TABLE ratingsets;
 
 -- +goose Down
 DROP TABLE documents;
-DROP TABLE epochs;
-DROP TABLE published_head;
+DROP TABLE channel_epochs;
+DROP TABLE channel_changes;
+DROP TABLE artifacts;
