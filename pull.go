@@ -50,8 +50,7 @@ func (s *Server) AddUpstream(rawURL string) error {
 		}
 	}
 
-	cl := client.New(u, s.corpus.upstreamFeed(u),
-		client.WithHTTPClient(&http.Client{Timeout: upstreamTimeout}))
+	cl := client.New(u, s.corpus.upstreamFeed(u), client.WithHTTPClient(s.httpClient))
 	s.upstreams = append(s.upstreams, &upstream{url: u, client: cl, reconcile: true})
 
 	return nil

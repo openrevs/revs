@@ -6,13 +6,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/sqlitestore"
+	"github.com/openrevs/revs/revstest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,10 +68,8 @@ func TestStoreContract(t *testing.T) {
 func TestClientRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
-	s, err := revs.NewServer(t.TempDir())
-	require.NoError(t, err)
-	ts := httptest.NewServer(s.Handler())
-	defer ts.Close()
+	network := revstest.NewNetwork(t)
+	s := network.NewServer()
 
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -86,15 +83,14 @@ func TestClientRoundTrip(t *testing.T) {
 	db, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
 
-	c := client.New(ts.URL, db.Feed("s"))
+	c := network.NewClientOn(s, db.Feed("s"))
 
 	pr, err := c.Push(ctx, key, content.Bytes())
 	require.NoError(t, err)
 	require.True(t, pr.Pushed)
 	require.Equal(t, 1, pr.Rev)
 
-	_, err = s.Cut(ctx)
-	require.NoError(t, err)
+	s.Cut()
 
 	res, err := c.Sync(ctx)
 	require.NoError(t, err)
@@ -110,7 +106,7 @@ func TestClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	defer db2.Close()
 
-	c2 := client.New(ts.URL, db2.Feed("s"))
+	c2 := network.NewClientOn(s, db2.Feed("s"))
 
 	epoch, err := c2.Epoch()
 	require.NoError(t, err)

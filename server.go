@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -34,8 +34,8 @@ type Server struct {
 	corpus *SQLiteStore // docs, plus the feeds pulled from upstreams
 	key    ed25519.PrivateKey
 
-	// pubDir is the root of the published static file tree (contains v1/).
-	pubDir string
+	// pub holds the published static file tree (served under /v1/).
+	pub Publications
 
 	cutInterval       time.Duration
 	snapshotEvery     int
@@ -43,53 +43,14 @@ type Server struct {
 
 	cutMu sync.Mutex
 
-	upstreams []*upstream
-	pullMu    sync.Mutex
-}
-
-func NewServer(dataDir string) (*Server, error) {
-	db, err := GetDB(dataDir)
-	if err != nil {
-		return nil, err
-	}
-
-	docs, err := NewSQLiteStore(db.DB)
-	if err != nil {
-		return nil, err
-	}
-
-	key, err := loadOrCreateServerKey(dataDir)
-	if err != nil {
-		return nil, err
-	}
-
-	s := &Server{
-		dal:               domain.NewDAL(db.DB),
-		db:                db,
-		docs:              docs,
-		corpus:            docs,
-		key:               key,
-		pubDir:            filepath.Join(dataDir, "public"),
-		cutInterval:       DefaultCutInterval,
-		snapshotEvery:     DefaultSnapshotEvery,
-		snapshotChunkSize: DefaultSnapshotChunkSize,
-	}
-
-	if err := os.MkdirAll(filepath.Join(s.pubDir, "v1"), 0755); err != nil {
-		return nil, err
-	}
-
-	// The index is regenerated from the DB, so a crash between publishing
-	// an epoch and advertising it self-heals here.
-	if err := s.writeIndex(context.Background()); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	httpClient   *http.Client // for upstreams
+	pullInterval time.Duration
+	upstreams    []*upstream
+	pullMu       sync.Mutex
 }
 
 // ServerOptions overrides server tunables. Zero values keep the
-// defaults set in NewServer.
+// defaults.
 type ServerOptions struct {
 	Listen            string
 	CutInterval       time.Duration
@@ -102,40 +63,127 @@ type ServerOptions struct {
 	PullInterval time.Duration
 }
 
-func Start2(dataDir string, opts ServerOptions) {
-	server, err := NewServer(dataDir)
+// ServerConfig holds everything a Server depends on. NewServer builds
+// one from a data directory; tests build their own, typically with an
+// in-memory database (OpenMemoryDB) and MemPublications, to run any
+// number of servers in one process.
+type ServerConfig struct {
+	// DB is the server's migrated database (GetDB or OpenMemoryDB).
+	DB *DB
+	// Key is the server's identity: it signs manifests, and clients
+	// pin it. Required.
+	Key ed25519.PrivateKey
+	// Publications receives the published file tree.
+	Publications Publications
+	// HTTPClient is used to pull from upstreams. Optional; tests use it
+	// to reach in-process servers (see the revstest package).
+	HTTPClient *http.Client
+
+	ServerOptions
+}
+
+// NewServer opens (creating if needed) a server whose database, key,
+// and publications live in dataDir.
+func NewServer(dataDir string) (*Server, error) {
+	return NewServerWithOptions(dataDir, ServerOptions{})
+}
+
+// NewServerWithOptions is NewServer with tunables overridden.
+func NewServerWithOptions(dataDir string, opts ServerOptions) (*Server, error) {
+	db, err := GetDB(dataDir)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	if opts.CutInterval > 0 {
-		server.cutInterval = opts.CutInterval
+	key, err := loadOrCreateServerKey(dataDir)
+	if err != nil {
+		return nil, err
 	}
-	if opts.SnapshotEvery > 0 {
-		server.snapshotEvery = opts.SnapshotEvery
+
+	return NewServerFromConfig(ServerConfig{
+		DB:            db,
+		Key:           key,
+		Publications:  DirPublications{Root: filepath.Join(dataDir, "public", "v1")},
+		ServerOptions: opts,
+	})
+}
+
+// NewServerFromConfig builds a server from explicit dependencies.
+func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
+	if cfg.DB == nil || cfg.Key == nil || cfg.Publications == nil {
+		return nil, errors.New("server config requires a DB, key, and publications")
 	}
-	if opts.SnapshotChunkSize > 0 {
-		server.snapshotChunkSize = opts.SnapshotChunkSize
+
+	docs, err := NewSQLiteStore(cfg.DB.DB)
+	if err != nil {
+		return nil, err
 	}
-	for _, u := range opts.Pull {
-		if err := server.AddUpstream(u); err != nil {
-			log.Fatal(err)
+
+	s := &Server{
+		dal:               domain.NewDAL(cfg.DB.DB),
+		db:                cfg.DB,
+		docs:              docs,
+		corpus:            docs,
+		key:               cfg.Key,
+		pub:               cfg.Publications,
+		httpClient:        cfg.HTTPClient,
+		cutInterval:       DefaultCutInterval,
+		snapshotEvery:     DefaultSnapshotEvery,
+		snapshotChunkSize: DefaultSnapshotChunkSize,
+		pullInterval:      DefaultPullInterval,
+	}
+	if s.httpClient == nil {
+		s.httpClient = &http.Client{Timeout: upstreamTimeout}
+	}
+
+	if cfg.CutInterval > 0 {
+		s.cutInterval = cfg.CutInterval
+	}
+	if cfg.SnapshotEvery > 0 {
+		s.snapshotEvery = cfg.SnapshotEvery
+	}
+	if cfg.SnapshotChunkSize > 0 {
+		s.snapshotChunkSize = cfg.SnapshotChunkSize
+	}
+	if cfg.PullInterval > 0 {
+		s.pullInterval = cfg.PullInterval
+	}
+	for _, u := range cfg.Pull {
+		if err := s.AddUpstream(u); err != nil {
+			return nil, err
 		}
 	}
-	pullInterval := opts.PullInterval
-	if pullInterval <= 0 {
-		pullInterval = DefaultPullInterval
+
+	// The index is regenerated from the DB, so a crash between publishing
+	// an epoch and advertising it self-heals here.
+	if err := s.writeIndex(context.Background()); err != nil {
+		return nil, err
 	}
+
+	return s, nil
+}
+
+func Start2(dataDir string, opts ServerOptions) {
+	server, err := NewServerWithOptions(dataDir, opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	listen := opts.Listen
 	if listen == "" {
 		listen = DefaultServerListen
 	}
 
 	server.startCutter(context.Background())
-	server.startPuller(context.Background(), pullInterval)
+	server.startPuller(context.Background(), server.pullInterval)
 
 	log.Printf("server listening on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))
+}
+
+// PublicKey returns the server's public key, which clients pin.
+func (s *Server) PublicKey() ed25519.PublicKey {
+	return s.key.Public().(ed25519.PublicKey)
 }
 
 // SetSnapshotChunkSize overrides the snapshot chunk target size in
@@ -156,7 +204,7 @@ func (s *Server) routes(r chi.Router) {
 	r.Post("/upload", s.uploadPost)
 
 	// Publications are static files served as static files.
-	fs := http.FileServer(http.Dir(filepath.Join(s.pubDir, "v1")))
+	fs := http.FileServer(s.pub.FS())
 	r.Handle("/v1/*", http.StripPrefix("/v1/", fs))
 }
 

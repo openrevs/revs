@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/revstest"
 )
 
 // harness drives an app with key presses, running commands to
@@ -31,6 +31,17 @@ func newHarness(t *testing.T, dir string) *harness {
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close() })
 
+	return harnessFor(t, c)
+}
+
+// newNetHarness drives a new collection on network.
+func newNetHarness(t *testing.T, network *revstest.Network) *harness {
+	t.Helper()
+	return harnessFor(t, network.NewCollection())
+}
+
+func harnessFor(t *testing.T, c *collection.Collection) *harness {
+	t.Helper()
 	h := &harness{t: t, a: newApp(c)}
 	h.a.syncOps = true
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -154,13 +165,11 @@ func TestMoviesAndViewings(t *testing.T) {
 }
 
 func TestIdentityAndPublishing(t *testing.T) {
-	srv, err := revs.NewServer(t.TempDir())
-	require.NoError(t, err)
-	sts := httptest.NewServer(srv.Handler())
-	t.Cleanup(sts.Close)
+	network := revstest.NewNetwork(t)
+	sts := network.NewServer()
 	ctx := context.Background()
 
-	alice, bob := newHarness(t, t.TempDir()), newHarness(t, t.TempDir())
+	alice, bob := newNetHarness(t, network), newNetHarness(t, network)
 	for _, h := range []*harness{alice, bob} {
 		h.keys("4", "g")
 		require.NotEmpty(t, h.a.c.UserID(ctx))
@@ -180,8 +189,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 		h.keys("3", "enter", "p")
 		require.Contains(t, h.a.flash, "Pushed revision 1")
 	}
-	_, err = srv.Cut(ctx)
-	require.NoError(t, err)
+	sts.Cut()
 
 	alice.keys("u")
 	require.Contains(t, alice.a.flash, "2 users changed")
@@ -193,7 +201,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 	require.Contains(t, alice.screen(), collection.ShortID(bob.a.c.UserID(ctx)))
 
 	// A second device with Alice's key gets a conflict, then merges.
-	alice2 := newHarness(t, t.TempDir())
+	alice2 := newNetHarness(t, network)
 	alice2.keys("4", "i")
 	alice2.a.prompt.input.SetValue(alice.a.c.PrivateKeyText(ctx))
 	alice2.keys("enter", "3", "a")

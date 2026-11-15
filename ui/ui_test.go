@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/revstest"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +45,11 @@ func newTestUI(t *testing.T, opts ...func(*Options)) *testUI {
 		Jar:           jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
+}
+
+// onNetwork has the UI reach servers on network.
+func onNetwork(network *revstest.Network) func(*Options) {
+	return func(o *Options) { o.HTTPClient = network.HTTPClient() }
 }
 
 // post submits a form and returns the redirect target (or "" for a
@@ -158,13 +164,11 @@ func TestIdentity(t *testing.T) {
 // TestPushPull runs two users against a real publishing server: each
 // pushes, the server cuts an epoch, and each sees the other's review.
 func TestPushPull(t *testing.T) {
-	srv, err := revs.NewServer(t.TempDir())
-	require.NoError(t, err)
-	sts := httptest.NewServer(srv.Handler())
-	t.Cleanup(sts.Close)
+	network := revstest.NewNetwork(t)
+	sts := network.NewServer()
 	ctx := context.Background()
 
-	alice, bob := newTestUI(t), newTestUI(t)
+	alice, bob := newTestUI(t, onNetwork(network)), newTestUI(t, onNetwork(network))
 	for _, u := range []*testUI{alice, bob} {
 		u.post("/identity/generate", nil)
 		u.post("/servers", url.Values{"url": {sts.URL}})
@@ -182,8 +186,7 @@ func TestPushPull(t *testing.T) {
 	_, msg = bob.post("/servers/1/push", nil)
 	require.Contains(t, msg, "Pushed revision 1")
 
-	_, err = srv.Cut(ctx)
-	require.NoError(t, err)
+	sts.Cut()
 
 	_, msg = alice.post("/servers/1/pull", nil)
 	require.Contains(t, msg, "2 users changed")
@@ -203,7 +206,7 @@ func TestPushPull(t *testing.T) {
 	// A second device with Alice's key: its push is stale until it
 	// merges Alice's published copy.
 	key := alice.app.c.PrivateKeyText(ctx)
-	alice2 := newTestUI(t)
+	alice2 := newTestUI(t, onNetwork(network))
 	alice2.post("/identity/import", url.Values{"private_key": {key}})
 	alice2.post("/servers", url.Values{"url": {sts.URL}})
 	alice2.post("/movies", url.Values{"title": {"Aliens"}, "year": {"1986"}})
@@ -216,8 +219,7 @@ func TestPushPull(t *testing.T) {
 	_, msg = alice2.post("/servers/1/push", nil)
 	require.Contains(t, msg, "Pushed revision 2")
 
-	_, err = srv.Cut(ctx)
-	require.NoError(t, err)
+	sts.Cut()
 	alice.post("/servers/1/pull", nil)
 	_, msg = alice.post("/servers/1/import-mine", nil)
 	require.Contains(t, msg, "Imported 1 new movies (1 already present)")
@@ -453,16 +455,10 @@ func TestLoopbackHost(t *testing.T) {
 }
 
 func TestRevisionsSharedAcrossServers(t *testing.T) {
-	var servers []string
-	for range 2 {
-		srv, err := revs.NewServer(t.TempDir())
-		require.NoError(t, err)
-		sts := httptest.NewServer(srv.Handler())
-		t.Cleanup(sts.Close)
-		servers = append(servers, sts.URL)
-	}
+	network := revstest.NewNetwork(t)
+	servers := []string{network.NewServer().URL, network.NewServer().URL}
 
-	u := newTestUI(t)
+	u := newTestUI(t, onNetwork(network))
 	u.post("/identity/generate", nil)
 	for _, s := range servers {
 		u.post("/servers", url.Values{"url": {s}})

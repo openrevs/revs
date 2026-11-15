@@ -29,6 +29,8 @@ type Options struct {
 	OpenBrowser bool
 	// WikidataURL overrides the Wikidata API endpoint (for tests).
 	WikidataURL string
+	// HTTPClient is used to talk to servers (for tests).
+	HTTPClient *http.Client
 }
 
 type App struct {
@@ -38,7 +40,7 @@ type App struct {
 
 // New opens the collection in the data directory.
 func New(opts Options) (*App, error) {
-	c, err := collection.Open(collection.Options{DataDir: opts.DataDir, WikidataURL: opts.WikidataURL})
+	c, err := collection.Open(collection.Options{DataDir: opts.DataDir, WikidataURL: opts.WikidataURL, HTTPClient: opts.HTTPClient})
 	if err != nil {
 		return nil, err
 	}

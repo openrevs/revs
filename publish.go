@@ -9,8 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"path"
 	"strconv"
 	"time"
 
@@ -188,8 +187,7 @@ func (s *Server) Cut(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	dir := filepath.Join(s.pubDir, "v1", "epochs", strconv.Itoa(epoch))
-	if err := publishFiles(dir, map[string][]byte{
+	if err := s.publishFiles(path.Join("epochs", strconv.Itoa(epoch)), map[string][]byte{
 		"patch":    compressed.Bytes(),
 		"manifest": manifest,
 	}); err != nil {
@@ -300,8 +298,7 @@ func (s *Server) writeSnapshot(ctx context.Context, epoch int, chainHash string)
 		files["snapshot."+strconv.Itoa(i)] = c
 	}
 
-	dir := filepath.Join(s.pubDir, "v1", "snapshots", strconv.Itoa(epoch))
-	if err := publishFiles(dir, files); err != nil {
+	if err := s.publishFiles(path.Join("snapshots", strconv.Itoa(epoch)), files); err != nil {
 		return err
 	}
 
@@ -382,18 +379,15 @@ func (s *Server) writeIndex(ctx context.Context) error {
 		return err
 	}
 
-	return writeFileAtomic(filepath.Join(s.pubDir, "v1", "index.json"), append(data, '\n'), 0644)
+	return s.pub.WriteFile("index.json", append(data, '\n'))
 }
 
-// publishFiles writes a set of files into dir via temp-and-rename, so no
-// partially written publication is ever observable.
-func publishFiles(dir string, files map[string][]byte) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
+// publishFiles writes a set of files into dir of the publications.
+// Each file is published atomically; callers advertise them (in the
+// index) only once all are written.
+func (s *Server) publishFiles(dir string, files map[string][]byte) error {
 	for name, data := range files {
-		if err := writeFileAtomic(filepath.Join(dir, name), data, 0644); err != nil {
+		if err := s.pub.WriteFile(path.Join(dir, name), data); err != nil {
 			return err
 		}
 	}
