@@ -19,6 +19,7 @@ type Document struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
+	Source       string
 }
 
 type Epoch struct {

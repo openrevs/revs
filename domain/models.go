@@ -32,6 +32,9 @@ type Document struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
+	// Source is where the document came from: "" for a direct upload,
+	// else the URL of the upstream server it was pulled from.
+	Source string
 }
 
 // Epoch is a row in the cut ledger. Kind is "patch" for epoch-advancing

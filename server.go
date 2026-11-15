@@ -28,10 +28,11 @@ const (
 )
 
 type Server struct {
-	dal  domain.DAL
-	db   *DB
-	docs BlobStore
-	key  ed25519.PrivateKey
+	dal    domain.DAL
+	db     *DB
+	docs   BlobStore
+	corpus *SQLiteStore // docs, plus the feeds pulled from upstreams
+	key    ed25519.PrivateKey
 
 	// pub holds the published static file tree (served under /v1/).
 	pub Publications
@@ -41,6 +42,11 @@ type Server struct {
 	snapshotChunkSize int
 
 	cutMu sync.Mutex
+
+	httpClient   *http.Client // for upstreams
+	pullInterval time.Duration
+	upstreams    []*upstream
+	pullMu       sync.Mutex
 }
 
 // ServerOptions overrides server tunables. Zero values keep the
@@ -50,6 +56,11 @@ type ServerOptions struct {
 	CutInterval       time.Duration
 	SnapshotEvery     int
 	SnapshotChunkSize int
+
+	// Pull lists the URLs of upstream servers to pull documents from,
+	// every PullInterval.
+	Pull         []string
+	PullInterval time.Duration
 }
 
 // ServerConfig holds everything a Server depends on. NewServer builds
@@ -64,6 +75,9 @@ type ServerConfig struct {
 	Key ed25519.PrivateKey
 	// Publications receives the published file tree.
 	Publications Publications
+	// HTTPClient is used to pull from upstreams. Optional; tests use it
+	// to reach in-process servers (see the revstest package).
+	HTTPClient *http.Client
 
 	ServerOptions
 }
@@ -109,11 +123,17 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 		dal:               domain.NewDAL(cfg.DB.DB),
 		db:                cfg.DB,
 		docs:              docs,
+		corpus:            docs,
 		key:               cfg.Key,
 		pub:               cfg.Publications,
+		httpClient:        cfg.HTTPClient,
 		cutInterval:       DefaultCutInterval,
 		snapshotEvery:     DefaultSnapshotEvery,
 		snapshotChunkSize: DefaultSnapshotChunkSize,
+		pullInterval:      DefaultPullInterval,
+	}
+	if s.httpClient == nil {
+		s.httpClient = &http.Client{Timeout: upstreamTimeout}
 	}
 
 	if cfg.CutInterval > 0 {
@@ -124,6 +144,14 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 	}
 	if cfg.SnapshotChunkSize > 0 {
 		s.snapshotChunkSize = cfg.SnapshotChunkSize
+	}
+	if cfg.PullInterval > 0 {
+		s.pullInterval = cfg.PullInterval
+	}
+	for _, u := range cfg.Pull {
+		if err := s.AddUpstream(u); err != nil {
+			return nil, err
+		}
 	}
 
 	// The index is regenerated from the DB, so a crash between publishing
@@ -138,7 +166,7 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 func Start2(dataDir string, opts ServerOptions) {
 	server, err := NewServerWithOptions(dataDir, opts)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	listen := opts.Listen
@@ -147,6 +175,7 @@ func Start2(dataDir string, opts ServerOptions) {
 	}
 
 	server.startCutter(context.Background())
+	server.startPuller(context.Background(), server.pullInterval)
 
 	log.Printf("server listening on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))

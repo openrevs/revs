@@ -2,6 +2,7 @@ package revs
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -84,42 +85,51 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	status, resp, uid, r := s.acceptDocument(req.Context(), body, latest, "")
+	userID, rev = uid, r
+	respond(status, resp)
+}
+
+// acceptDocument runs the checks every incoming full document must pass,
+// whether uploaded or pulled from an upstream server, and persists it
+// with the given source. latest is the user's latest accepted document
+// if the caller already loaded it, else nil. It returns the HTTP status
+// and verdict, plus the user id and rev once the document has parsed.
+func (s *Server) acceptDocument(ctx context.Context, body []byte, latest *domain.Document, source string) (int, uploadResponse, string, int) {
 	if len(body) > maxDocumentSize {
-		respond(http.StatusBadRequest, uploadResponse{
+		return http.StatusBadRequest, uploadResponse{
 			Status: "invalid",
 			Reason: fmt.Sprintf("document is %d bytes, exceeding the %d byte limit", len(body), maxDocumentSize),
-		})
-		return
+		}, "", 0
 	}
 
 	user, doc, err := ParseRatingset(body)
 	if err != nil {
-		respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()})
-		return
+		return http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()}, "", 0
 	}
-	userID, rev = user.ID, user.Revision
+	userID, rev := user.ID, user.Revision
+	verdict := func(status int, resp uploadResponse) (int, uploadResponse, string, int) {
+		return status, resp, userID, rev
+	}
 
-	if user.Revision < 1 {
-		respond(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: "revision must be at least 1"})
-		return
+	if rev < 1 {
+		return verdict(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: "revision must be at least 1"})
 	}
 
 	if latest == nil {
-		latest, err = s.dal.LatestDocument(req.Context(), user.ID)
+		latest, err = s.dal.LatestDocument(ctx, userID)
 		if err != nil {
-			respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
-			return
+			return verdict(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 		}
 	}
 
-	if latest != nil && user.Revision <= latest.Rev {
-		respond(http.StatusConflict, uploadResponse{
+	if latest != nil && rev <= latest.Rev {
+		return verdict(http.StatusConflict, uploadResponse{
 			Status: "stale",
 			Reason: "revision is not greater than the latest accepted revision",
 			Rev:    latest.Rev,
 			Hash:   latest.Hash,
 		})
-		return
 	}
 
 	// Store the canonical encoding so the blob's bytes always match the
@@ -128,28 +138,26 @@ func (s *Server) uploadPost(w http.ResponseWriter, req *http.Request) {
 	info := doc.Info()
 
 	if err := s.docs.Put(info.Hash, canonical); err != nil {
-		respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
-		return
+		return verdict(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 	}
 
-	if err := s.dal.AddDocument(req.Context(), &domain.Document{
-		Userid:       user.ID,
-		Rev:          user.Revision,
+	if err := s.dal.AddDocument(ctx, &domain.Document{
+		Userid:       userID,
+		Rev:          rev,
 		Hash:         info.Hash,
 		Size:         len(canonical),
 		ReceivedTime: util.Now(),
+		Source:       source,
 	}); err != nil {
 		// A concurrent upload of the same rev loses the (userid, rev)
 		// uniqueness race; report it as stale rather than a server error.
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			respond(http.StatusConflict, uploadResponse{Status: "stale", Reason: "revision already accepted"})
-			return
+			return verdict(http.StatusConflict, uploadResponse{Status: "stale", Reason: "revision already accepted"})
 		}
-		respond(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
-		return
+		return verdict(http.StatusInternalServerError, uploadResponse{Status: "error", Reason: err.Error()})
 	}
 
-	respond(http.StatusOK, uploadResponse{Status: "accepted", Rev: user.Revision, Hash: info.Hash})
+	return verdict(http.StatusOK, uploadResponse{Status: "accepted", Rev: rev, Hash: info.Hash})
 }
 
 // logUpload records the outcome of an upload: Info for accepted, Warn for

@@ -57,7 +57,9 @@ func WithServerOptions(opts revs.ServerOptions) ServerOption {
 }
 
 // NewServer starts a new server on the network. The server does not cut
-// epochs on its own: tests call Cut when they want one.
+// epochs or pull on its own: tests call Cut and Pull when they want
+// one. Upstreams listed in WithServerOptions' Pull are reached over the
+// network.
 func (n *Network) NewServer(opts ...ServerOption) *Server {
 	n.t.Helper()
 
@@ -101,6 +103,7 @@ func (s *Server) start() {
 		DB:            s.DB,
 		Key:           s.Key,
 		Publications:  s.Publications,
+		HTTPClient:    s.net.httpClient,
 		ServerOptions: s.opts,
 	})
 	if err != nil {
@@ -151,4 +154,24 @@ func (s *Server) Up() { s.net.SetDown(s.Host, false) }
 func (s *Server) Restart() {
 	s.net.t.Helper()
 	s.start()
+}
+
+// AddUpstream has s pull from up, over the network. It survives
+// Restart.
+func (s *Server) AddUpstream(up *Server) {
+	s.net.t.Helper()
+
+	s.mu.Lock()
+	s.opts.Pull = append(s.opts.Pull, up.URL)
+	s.mu.Unlock()
+
+	if err := s.Server().AddUpstream(up.URL); err != nil {
+		s.net.t.Fatalf("revstest: adding upstream %s to %s: %v", up.Host, s.Host, err)
+	}
+}
+
+// Pull pulls once from every upstream. Unlike Cut it returns the error,
+// since tests of unreachable or misbehaving upstreams expect one.
+func (s *Server) Pull() error {
+	return s.Server().Pull(context.Background())
 }

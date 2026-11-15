@@ -186,3 +186,61 @@ func TestUnknownHost(t *testing.T) {
 	var opErr *net.OpError
 	require.True(t, errors.As(err, &opErr), "got %v", err)
 }
+
+// Documents travel down a chain of servers pulling from each other: an
+// author publishes to the origin, a mirror pulls from it, and an edge
+// pulls from the mirror. Upstream outages and restarts don't lose the
+// chain.
+func TestServerPullChain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	network := revstest.NewNetwork(t)
+
+	origin, mirror, edge := network.NewServer(), network.NewServer(), network.NewServer()
+	mirror.AddUpstream(origin)
+	edge.AddUpstream(mirror)
+
+	key := revstest.NewKey(t)
+	uid := client.UserID(key.Public().(ed25519.PublicKey))
+	author := network.NewClient(origin)
+	_, err := author.Push(ctx, key, content(key, "Alien"))
+	require.NoError(t, err)
+	origin.Cut()
+
+	propagate := func() {
+		t.Helper()
+		require.NoError(t, mirror.Pull())
+		mirror.Cut()
+		require.NoError(t, edge.Pull())
+		edge.Cut()
+	}
+	propagate()
+
+	reader := network.NewClient(edge)
+	_, err = reader.Sync(ctx)
+	require.NoError(t, err)
+	doc, err := reader.Document(uid)
+	require.NoError(t, err)
+	require.Equal(t, 1, doc.Rev)
+
+	// The origin goes down: the mirror's pull fails, and nothing new
+	// arrives downstream.
+	origin.Down()
+	var opErr *net.OpError
+	require.ErrorAs(t, mirror.Pull(), &opErr)
+
+	// Back up, with a new revision, and the mirror restarted meanwhile:
+	// it still pulls from the origin.
+	origin.Up()
+	_, err = author.Push(ctx, key, content(key, "Alien", "Aliens"))
+	require.NoError(t, err)
+	origin.Cut()
+	mirror.Restart()
+	propagate()
+
+	_, err = reader.Sync(ctx)
+	require.NoError(t, err)
+	doc, err = reader.Document(uid)
+	require.NoError(t, err)
+	require.Equal(t, 2, doc.Rev)
+}
