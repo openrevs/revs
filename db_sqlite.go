@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/pressly/goose/v3"
-	_ "modernc.org/sqlite"
+	"github.com/openrevs/revs/internal/sqlitedb"
 )
 
 const dbfilename = "revs.db"
@@ -39,30 +38,35 @@ func GetDB(dir string) (*DB, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", "file:"+abs+"?cache=shared")
+	db, err := openDB(sqlitedb.FileDSN(abs))
+	if err != nil {
+		return nil, err
+	}
+
+	openDBs[abs] = db
+
+	return db, nil
+}
+
+// OpenMemoryDB opens a new, private, migrated in-memory database. It
+// is not cached: every call returns a different database, which is gone
+// once the handle is closed. Tests use it to run any number of servers
+// in one process without touching the filesystem.
+func OpenMemoryDB() (*DB, error) {
+	return openDB(sqlitedb.MemoryDSN())
+}
+
+func openDB(dsn string) (*DB, error) {
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-		return nil, err
-	}
 
-	// Migrate
-	goose.SetBaseFS(migrations)
-
-	if err := goose.SetDialect("sqlite"); err != nil {
+	if err := sqlitedb.Migrate(db, migrations, "migrations2"); err != nil {
+		db.Close()
 		return nil, err
 	}
 
-	if err := goose.Up(db, "migrations2"); err != nil {
-		return nil, err
-	}
-
-	openDBs[abs] = &DB{db}
-
-	return openDBs[abs], nil
+	return &DB{db}, nil
 }

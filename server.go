@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -33,15 +33,16 @@ const (
 var DefaultCompactEvery = []int{24, 168}
 
 type Server struct {
-	dal  domain.DAL
-	db   *DB
-	docs BlobStore
+	dal    domain.DAL
+	db     *DB
+	docs   BlobStore
+	corpus *SQLiteStore // docs, plus the feeds pulled from upstreams
 	// key is the server's identity: it signs every manifest, and its
 	// derived id is how consumers track the server.
 	key ed25519.PrivateKey
 
-	// pubDir is the root of the published static file tree (contains v1/).
-	pubDir string
+	// pub holds the published static file tree (served under /v1/).
+	pub Publications
 
 	channels      []channel
 	cutInterval   time.Duration
@@ -52,15 +53,58 @@ type Server struct {
 	compactEvery []int
 
 	cutMu sync.Mutex
+
+	httpClient   *http.Client // for upstreams
+	pullInterval time.Duration
+	upstreams    []*upstream
+	pullMu       sync.Mutex
 }
 
-func NewServer(dataDir string) (*Server, error) {
-	db, err := GetDB(dataDir)
-	if err != nil {
-		return nil, err
-	}
+// ServerOptions overrides server tunables. Zero values keep the
+// defaults.
+type ServerOptions struct {
+	Listen        string
+	CutInterval   time.Duration
+	SnapshotEvery int
+	PartSize      int
+	// CompactEvery replaces the compaction intervals when non-nil; an
+	// empty, non-nil slice disables compaction.
+	CompactEvery []int
 
-	docs, err := NewSQLiteStore(db.DB)
+	// Pull lists the URLs of upstream servers to pull documents from,
+	// every PullInterval.
+	Pull         []string
+	PullInterval time.Duration
+}
+
+// ServerConfig holds everything a Server depends on. NewServer builds
+// one from a data directory; tests build their own, typically with an
+// in-memory database (OpenMemoryDB) and MemPublications, to run any
+// number of servers in one process.
+type ServerConfig struct {
+	// DB is the server's migrated database (GetDB or OpenMemoryDB).
+	DB *DB
+	// Key is the server's identity: it signs manifests, and clients
+	// pin it. Required.
+	Key ed25519.PrivateKey
+	// Publications receives the published file tree.
+	Publications Publications
+	// HTTPClient is used to pull from upstreams. Optional; tests use it
+	// to reach in-process servers (see the revstest package).
+	HTTPClient *http.Client
+
+	ServerOptions
+}
+
+// NewServer opens (creating if needed) a server whose database, key,
+// and publications live in dataDir.
+func NewServer(dataDir string) (*Server, error) {
+	return NewServerWithOptions(dataDir, ServerOptions{})
+}
+
+// NewServerWithOptions is NewServer with tunables overridden.
+func NewServerWithOptions(dataDir string, opts ServerOptions) (*Server, error) {
+	db, err := GetDB(dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -70,21 +114,63 @@ func NewServer(dataDir string) (*Server, error) {
 		return nil, err
 	}
 
+	return NewServerFromConfig(ServerConfig{
+		DB:            db,
+		Key:           key,
+		Publications:  DirPublications{Root: filepath.Join(dataDir, "public", "v1")},
+		ServerOptions: opts,
+	})
+}
+
+// NewServerFromConfig builds a server from explicit dependencies.
+func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
+	if cfg.DB == nil || cfg.Key == nil || cfg.Publications == nil {
+		return nil, errors.New("server config requires a DB, key, and publications")
+	}
+
+	docs, err := NewSQLiteStore(cfg.DB.DB)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
-		dal:           domain.NewDAL(db.DB),
-		db:            db,
+		dal:           domain.NewDAL(cfg.DB.DB),
+		db:            cfg.DB,
 		docs:          docs,
-		key:           key,
-		pubDir:        filepath.Join(dataDir, "public"),
+		corpus:        docs,
+		key:           cfg.Key,
+		pub:           cfg.Publications,
+		httpClient:    cfg.HTTPClient,
 		cutInterval:   DefaultCutInterval,
 		snapshotEvery: DefaultSnapshotEvery,
 		partSize:      DefaultPartSize,
 		compactEvery:  slices.Clone(DefaultCompactEvery),
+		pullInterval:  DefaultPullInterval,
+	}
+	if s.httpClient == nil {
+		s.httpClient = &http.Client{Timeout: upstreamTimeout}
 	}
 	s.channels = s.defaultChannels()
 
-	if err := os.MkdirAll(filepath.Join(s.pubDir, "v1"), 0755); err != nil {
-		return nil, err
+	if cfg.CutInterval > 0 {
+		s.cutInterval = cfg.CutInterval
+	}
+	if cfg.SnapshotEvery > 0 {
+		s.snapshotEvery = cfg.SnapshotEvery
+	}
+	if cfg.PartSize > 0 {
+		s.partSize = cfg.PartSize
+	}
+	if cfg.CompactEvery != nil {
+		s.compactEvery = slices.Clone(cfg.CompactEvery)
+	}
+	if cfg.PullInterval > 0 {
+		s.pullInterval = cfg.PullInterval
+	}
+	for _, u := range cfg.Pull {
+		if err := s.AddUpstream(u); err != nil {
+			return nil, err
+		}
 	}
 
 	// The index is regenerated from the DB, so a crash between publishing
@@ -96,45 +182,27 @@ func NewServer(dataDir string) (*Server, error) {
 	return s, nil
 }
 
-// ServerOptions overrides server tunables. Zero values keep the
-// defaults set in NewServer.
-type ServerOptions struct {
-	Listen        string
-	CutInterval   time.Duration
-	SnapshotEvery int
-	PartSize      int
-	// CompactEvery replaces the compaction intervals when non-nil; an
-	// empty, non-nil slice disables compaction.
-	CompactEvery []int
-}
-
 func Start2(dataDir string, opts ServerOptions) {
-	server, err := NewServer(dataDir)
+	server, err := NewServerWithOptions(dataDir, opts)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
-	if opts.CutInterval > 0 {
-		server.cutInterval = opts.CutInterval
-	}
-	if opts.SnapshotEvery > 0 {
-		server.snapshotEvery = opts.SnapshotEvery
-	}
-	if opts.PartSize > 0 {
-		server.partSize = opts.PartSize
-	}
-	if opts.CompactEvery != nil {
-		server.compactEvery = slices.Clone(opts.CompactEvery)
-	}
 	listen := opts.Listen
 	if listen == "" {
 		listen = DefaultServerListen
 	}
 
 	server.startCutter(context.Background())
+	server.startPuller(context.Background(), server.pullInterval)
 
 	log.Printf("server listening on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, server.Handler()))
+}
+
+// PublicKey returns the server's public key, which clients pin.
+func (s *Server) PublicKey() ed25519.PublicKey {
+	return s.key.Public().(ed25519.PublicKey)
 }
 
 // SetPartSize overrides the archive part target size in bytes. It
@@ -165,7 +233,7 @@ func (s *Server) routes(r chi.Router) {
 	r.Post("/upload", s.uploadPost)
 
 	// Publications are static files served as static files.
-	fs := http.FileServer(http.Dir(filepath.Join(s.pubDir, "v1")))
+	fs := http.FileServer(s.pub.FS())
 	r.Handle("/v1/*", http.StripPrefix("/v1/", fs))
 }
 

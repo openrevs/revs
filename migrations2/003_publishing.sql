@@ -1,9 +1,8 @@
 -- +goose Up
 
 -- The server's accepted-document ledger. Document blobs live in the
--- line store; this table holds metadata only. direct records whether the
--- document was uploaded to this server directly (the "direct" channel)
--- rather than arriving from another server.
+-- line store; this table holds metadata only. (004 adds source, which
+-- records whether the document was uploaded directly or pulled.)
 CREATE TABLE documents
 (
     userid text NOT NULL
@@ -11,7 +10,6 @@ CREATE TABLE documents
     , hash text NOT NULL
     , size integer NOT NULL
     , received_time datetime NOT NULL
-    , direct boolean NOT NULL
     , PRIMARY KEY (userid, rev)
 );
 

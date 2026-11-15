@@ -17,7 +17,7 @@ func documentFromSqlc(d sqlc.Document) *Document {
 		Hash:         d.Hash,
 		Size:         d.Size,
 		ReceivedTime: d.ReceivedTime,
-		Direct:       d.Direct,
+		Source:       d.Source,
 	}
 }
 
@@ -36,7 +36,7 @@ func (d *DAL) AddDocument(ctx context.Context, doc *Document) error {
 		Hash:         doc.Hash,
 		Size:         doc.Size,
 		ReceivedTime: doc.ReceivedTime,
-		Direct:       doc.Direct,
+		Source:       doc.Source,
 	})
 }
 

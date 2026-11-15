@@ -92,14 +92,19 @@ type serverCmd struct {
 	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
 	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
+	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (serverCmd) Help() string {
 	return "Accepts signed ratings documents and periodically publishes them as an " +
 		"epoch on each of its channels, with a full snapshot every " +
 		"--snapshot-every epochs and patches compacted at the --compact-every " +
-		"boundaries. The data directory holds the document store and the " +
-		"published tree."
+		"boundaries. With --pull, it also pulls the documents other servers " +
+		"publish and republishes the ones newer than its own, remembering which " +
+		"server each came from. The data directory holds the server's identity " +
+		"key, its document store and the published tree; back it up to keep the " +
+		"server's identity."
 }
 
 type clientCmd struct {
@@ -121,6 +126,8 @@ type clientServerCmd struct {
 	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
 	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
 	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
+	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
+	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 }
 
 func (clientServerCmd) Help() string {
@@ -235,6 +242,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 			"default_snapshot_every": strconv.Itoa(revs.DefaultSnapshotEvery),
 			"default_part_size":      strconv.Itoa(revs.DefaultPartSize),
 			"default_compact_every":  joinInts(revs.DefaultCompactEvery),
+			"default_pull_interval":  revs.DefaultPullInterval.String(),
 		},
 	)
 }
@@ -260,6 +268,8 @@ func main() {
 			SnapshotEvery: CLI.Server.SnapshotEvery,
 			PartSize:      CLI.Server.PartSize,
 			CompactEvery:  nonNil(CLI.Server.CompactEvery),
+			Pull:          CLI.Server.Pull,
+			PullInterval:  CLI.Server.PullInterval,
 		})
 	case "client":
 		ensureDir(CLI.Client.DataDir)
@@ -272,6 +282,8 @@ func main() {
 			SnapshotEvery: CLI.ClientServer.SnapshotEvery,
 			PartSize:      CLI.ClientServer.PartSize,
 			CompactEvery:  nonNil(CLI.ClientServer.CompactEvery),
+			Pull:          CLI.ClientServer.Pull,
+			PullInterval:  CLI.ClientServer.PullInterval,
 		})
 		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
 	case "tui":

@@ -73,7 +73,7 @@ func (q *Queries) AddChannelEpoch(ctx context.Context, arg AddChannelEpochParams
 }
 
 const addDocument = `-- name: AddDocument :exec
-INSERT INTO documents (userid, rev, hash, size, received_time, direct)
+INSERT INTO documents (userid, rev, hash, size, received_time, source)
 VALUES (?, ?, ?, ?, ?, ?)
 `
 
@@ -83,7 +83,7 @@ type AddDocumentParams struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
-	Direct       bool
+	Source       string
 }
 
 func (q *Queries) AddDocument(ctx context.Context, arg AddDocumentParams) error {
@@ -93,7 +93,7 @@ func (q *Queries) AddDocument(ctx context.Context, arg AddDocumentParams) error 
 		arg.Hash,
 		arg.Size,
 		arg.ReceivedTime,
-		arg.Direct,
+		arg.Source,
 	)
 	return err
 }
@@ -134,7 +134,7 @@ func (q *Queries) ChannelArtifacts(ctx context.Context, channel string) ([]Artif
 }
 
 const channelDocuments = `-- name: ChannelDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.direct FROM channel_changes c
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM channel_changes c
 JOIN documents d ON d.userid = c.userid AND d.rev = c.rev
 WHERE c.channel = ?1
   AND c.epoch = (
@@ -165,7 +165,7 @@ func (q *Queries) ChannelDocuments(ctx context.Context, arg ChannelDocumentsPara
 			&i.Hash,
 			&i.Size,
 			&i.ReceivedTime,
-			&i.Direct,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -181,7 +181,7 @@ func (q *Queries) ChannelDocuments(ctx context.Context, arg ChannelDocumentsPara
 }
 
 const documentByUserRev = `-- name: DocumentByUserRev :one
-SELECT userid, rev, hash, size, received_time, direct FROM documents WHERE userid = ? AND rev = ?
+SELECT userid, rev, hash, size, received_time, source FROM documents WHERE userid = ? AND rev = ?
 `
 
 type DocumentByUserRevParams struct {
@@ -198,7 +198,7 @@ func (q *Queries) DocumentByUserRev(ctx context.Context, arg DocumentByUserRevPa
 		&i.Hash,
 		&i.Size,
 		&i.ReceivedTime,
-		&i.Direct,
+		&i.Source,
 	)
 	return i, err
 }
@@ -215,9 +215,9 @@ func (q *Queries) LatestChannelEpoch(ctx context.Context, channel string) (int, 
 }
 
 const latestDirectDocuments = `-- name: LatestDirectDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.direct FROM documents d
-WHERE d.direct
-  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.direct)
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
+WHERE d.source = ''
+  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.source = '')
 ORDER BY d.userid
 `
 
@@ -236,7 +236,7 @@ func (q *Queries) LatestDirectDocuments(ctx context.Context) ([]Document, error)
 			&i.Hash,
 			&i.Size,
 			&i.ReceivedTime,
-			&i.Direct,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -252,7 +252,7 @@ func (q *Queries) LatestDirectDocuments(ctx context.Context) ([]Document, error)
 }
 
 const latestDocumentByUser = `-- name: LatestDocumentByUser :one
-SELECT userid, rev, hash, size, received_time, direct FROM documents WHERE userid = ? ORDER BY rev DESC LIMIT 1
+SELECT userid, rev, hash, size, received_time, source FROM documents WHERE userid = ? ORDER BY rev DESC LIMIT 1
 `
 
 func (q *Queries) LatestDocumentByUser(ctx context.Context, userid string) (Document, error) {
@@ -264,13 +264,13 @@ func (q *Queries) LatestDocumentByUser(ctx context.Context, userid string) (Docu
 		&i.Hash,
 		&i.Size,
 		&i.ReceivedTime,
-		&i.Direct,
+		&i.Source,
 	)
 	return i, err
 }
 
 const latestDocuments = `-- name: LatestDocuments :many
-SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.direct FROM documents d
+SELECT d.userid, d.rev, d.hash, d.size, d.received_time, d.source FROM documents d
 WHERE d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid)
 ORDER BY d.userid
 `
@@ -290,7 +290,7 @@ func (q *Queries) LatestDocuments(ctx context.Context) ([]Document, error) {
 			&i.Hash,
 			&i.Size,
 			&i.ReceivedTime,
-			&i.Direct,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}

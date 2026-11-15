@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -219,7 +219,7 @@ func (s *Server) cutChannel(ctx context.Context, ch channel) (int, error) {
 
 	epoch := cur + 1
 	created := util.Now().UTC().Truncate(time.Second)
-	dir := filepath.Join(s.pubDir, "v1", ch.name)
+	dir := ch.name
 
 	// Newest-first, so a mostly synced consumer's skippable entries
 	// cluster at the end.
@@ -294,7 +294,7 @@ func patchEntryName(userid string, base, target int) string {
 // manifest.
 func (s *Server) writePatch(dir, chName string, start, end int, from map[string]*domain.Document, to []*domain.Document, created time.Time) (int, error) {
 	base := fmt.Sprintf("patch-%d-%d", start, end)
-	w, err := newArchiveWriter(dir, base, s.partSize, created)
+	w, err := newArchiveWriter(s.pub, dir, base, s.partSize, created)
 	if err != nil {
 		return 0, err
 	}
@@ -354,7 +354,7 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 
 	rng := [2]int{start, end}
 	meta := manifestMeta{Manifest: kindPatch, Channel: chName, Range: &rng}
-	if err := s.writeManifest(filepath.Join(dir, "patch-manifest-"+strings.TrimPrefix(base, "patch-")+".sjsonl.gz"), meta, created, lines); err != nil {
+	if err := s.writeManifest(path.Join(dir, "patch-manifest-"+strings.TrimPrefix(base, "patch-")+".sjsonl.gz"), meta, created, lines); err != nil {
 		return 0, err
 	}
 
@@ -364,7 +364,7 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 // writeSnapshot publishes snapshot-<epoch> and its manifest: the full
 // document of every user in the channel at that epoch.
 func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Document, created time.Time) (int, error) {
-	w, err := newArchiveWriter(dir, fmt.Sprintf("snapshot-%d", epoch), s.partSize, created)
+	w, err := newArchiveWriter(s.pub, dir, fmt.Sprintf("snapshot-%d", epoch), s.partSize, created)
 	if err != nil {
 		return 0, err
 	}
@@ -389,7 +389,7 @@ func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Doc
 	}
 
 	meta := manifestMeta{Manifest: kindSnapshot, Channel: chName, Epoch: epoch}
-	if err := s.writeManifest(filepath.Join(dir, fmt.Sprintf("snapshot-manifest-%d.sjsonl.gz", epoch)), meta, created, lines); err != nil {
+	if err := s.writeManifest(path.Join(dir, fmt.Sprintf("snapshot-manifest-%d.sjsonl.gz", epoch)), meta, created, lines); err != nil {
 		return 0, err
 	}
 
@@ -397,8 +397,8 @@ func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Doc
 }
 
 // writeManifest signs a manifest with the server key and writes it,
-// gzipped, to path (atomically, like the archives).
-func (s *Server) writeManifest(path string, meta manifestMeta, created time.Time, lines []any) error {
+// gzipped, to name in the publications (atomically, like the archives).
+func (s *Server) writeManifest(name string, meta manifestMeta, created time.Time, lines []any) error {
 	meta.ServerID = s.serverID()
 	meta.Created = created.UTC().Format(time.RFC3339)
 	meta.Format = manifestFormat
@@ -427,7 +427,7 @@ func (s *Server) writeManifest(path string, meta manifestMeta, created time.Time
 		return err
 	}
 
-	return writeFileAtomic(path, gz.Bytes(), 0644)
+	return s.pub.WriteFile(name, gz.Bytes())
 }
 
 // writeIndex regenerates /v1/index.json from the database.
@@ -473,5 +473,5 @@ func (s *Server) writeIndex(ctx context.Context) error {
 		return err
 	}
 
-	return writeFileAtomic(filepath.Join(s.pubDir, "v1", "index.json"), append(data, '\n'), 0644)
+	return s.pub.WriteFile("index.json", append(data, '\n'))
 }

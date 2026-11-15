@@ -1,5 +1,5 @@
 -- name: AddDocument :exec
-INSERT INTO documents (userid, rev, hash, size, received_time, direct)
+INSERT INTO documents (userid, rev, hash, size, received_time, source)
 VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: LatestDocumentByUser :one
@@ -15,8 +15,8 @@ ORDER BY d.userid;
 
 -- name: LatestDirectDocuments :many
 SELECT d.* FROM documents d
-WHERE d.direct
-  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.direct)
+WHERE d.source = ''
+  AND d.rev = (SELECT MAX(rev) FROM documents m WHERE m.userid = d.userid AND m.source = '')
 ORDER BY d.userid;
 
 -- name: ChannelDocuments :many

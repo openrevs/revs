@@ -32,9 +32,9 @@ type Document struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
-	// Direct reports that the document was uploaded to this server
-	// directly, rather than arriving from another server.
-	Direct bool
+	// Source is where the document came from: "" for a direct upload,
+	// else the URL of the upstream server it was pulled from.
+	Source string
 }
 
 // Artifact is a published snapshot or patch of a channel. A snapshot

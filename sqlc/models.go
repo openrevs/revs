@@ -41,7 +41,7 @@ type Document struct {
 	Hash         string
 	Size         int
 	ReceivedTime time.Time
-	Direct       bool
+	Source       string
 }
 
 type Rating struct {

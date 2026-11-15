@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
@@ -29,14 +28,23 @@ import (
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
 
-	s, err := NewServer(t.TempDir())
+	db, err := OpenMemoryDB()
 	require.NoError(t, err)
-	s.snapshotEvery = 1 // exercise the snapshot path on every cut
+	t.Cleanup(func() { db.Close() })
 
-	r := chi.NewRouter()
-	s.routes(r)
+	_, key, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
 
-	ts := httptest.NewServer(r)
+	s, err := NewServerFromConfig(ServerConfig{
+		DB:           db,
+		Key:          key,
+		Publications: &MemPublications{},
+		// Exercise the snapshot path on every cut.
+		ServerOptions: ServerOptions{SnapshotEvery: 1},
+	})
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
 	return s, ts
@@ -491,6 +499,7 @@ func TestDirectChannel(t *testing.T) {
 	require.NoError(t, s.docs.Put(hash, canon))
 	require.NoError(t, s.dal.AddDocument(ctx, &domain.Document{
 		Userid: relayed.ID, Rev: 1, Hash: hash, Size: len(canon), ReceivedTime: time.Now(),
+		Source: "https://upstream.example",
 	}))
 
 	_, err := s.Cut(ctx)

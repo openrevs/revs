@@ -2,10 +2,10 @@ package revs
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
-	"os"
-	"path/filepath"
+	"path"
 	"time"
 )
 
@@ -14,12 +14,13 @@ import (
 // is a complete gzipped ustar file holding only regular files, and parts
 // split only at entry boundaries.
 //
-// Each part is written to a temporary file and renamed into place when
-// it is complete, so no partially written part is ever visible. The
+// Each part is built in memory and published when it is complete, so no
+// partially written part is ever visible. The
 // part size is a target measured on the uncompressed tar stream (an
 // upper bound on the compressed size); an entry larger than the target
 // gets a part to itself.
 type archiveWriter struct {
+	pub      Publications
 	dir      string
 	base     string
 	partSize int
@@ -28,17 +29,16 @@ type archiveWriter struct {
 	parts int
 
 	// The open part, if any.
-	tmp  *os.File
+	buf  *bytes.Buffer
 	gz   *gzip.Writer
 	tw   *tar.Writer
 	size int
 }
 
-func newArchiveWriter(dir, base string, partSize int, modTime time.Time) (*archiveWriter, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
-	}
+// newArchiveWriter writes parts into dir (slash-separated) of pub.
+func newArchiveWriter(pub Publications, dir, base string, partSize int, modTime time.Time) (*archiveWriter, error) {
 	return &archiveWriter{
+		pub:      pub,
 		dir:      dir,
 		base:     base,
 		partSize: partSize,
@@ -103,23 +103,15 @@ func (w *archiveWriter) Close() (int, error) {
 	return w.parts, nil
 }
 
-// Abort discards the open part, if any. Parts already renamed into place
-// stay; they are unreferenced until an index lists them.
+// Abort discards the open part, if any. Parts already published stay;
+// they are unreferenced until an index lists them.
 func (w *archiveWriter) Abort() {
-	if w.tmp != nil {
-		w.tmp.Close()
-		os.Remove(w.tmp.Name())
-		w.tmp, w.gz, w.tw = nil, nil, nil
-	}
+	w.buf, w.gz, w.tw = nil, nil, nil
 }
 
 func (w *archiveWriter) openPart() error {
-	tmp, err := os.CreateTemp(w.dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	w.tmp = tmp
-	w.gz = gzip.NewWriter(tmp)
+	w.buf = new(bytes.Buffer)
+	w.gz = gzip.NewWriter(w.buf)
 	w.tw = tar.NewWriter(w.gz)
 	w.size = 0
 	w.parts++
@@ -131,26 +123,11 @@ func (w *archiveWriter) closePart() error {
 	if err == nil {
 		err = w.gz.Close()
 	}
-	if err == nil {
-		err = w.tmp.Chmod(0644)
-	}
+	buf := w.buf
+	w.Abort()
 	if err != nil {
-		w.Abort()
 		return err
 	}
 
-	tmp := w.tmp
-	w.tmp, w.gz, w.tw = nil, nil, nil
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-
-	path := filepath.Join(w.dir, fmt.Sprintf("%s_%d.tar.gz", w.base, w.parts))
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-
-	return nil
+	return w.pub.WriteFile(path.Join(w.dir, fmt.Sprintf("%s_%d.tar.gz", w.base, w.parts)), buf.Bytes())
 }
