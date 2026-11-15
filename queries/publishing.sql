@@ -1,6 +1,6 @@
 -- name: AddDocument :exec
-INSERT INTO documents (userid, rev, hash, size, received_time)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO documents (userid, rev, hash, size, received_time, source)
+VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: LatestDocumentByUser :one
 SELECT * FROM documents WHERE userid = ? ORDER BY rev DESC LIMIT 1;

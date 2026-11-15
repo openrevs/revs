@@ -167,3 +167,33 @@ func TestRevsHome(t *testing.T) {
 		t.Errorf("tui data dir = %q, want %q", c.TUI.DataDir, home)
 	}
 }
+
+func TestConfigPullList(t *testing.T) {
+	cfg := `
+server:
+  pull:
+    - https://a.example
+    - https://b.example
+  pull-interval: 5m
+`
+	c := parseWith(t, cfg, "server")
+	want := []string{"https://a.example", "https://b.example"}
+	if fmt.Sprint(c.Server.Pull) != fmt.Sprint(want) {
+		t.Errorf("pull = %q, want %q", c.Server.Pull, want)
+	}
+	if c.Server.PullInterval != 5*time.Minute {
+		t.Errorf("pull interval = %v, want 5m", c.Server.PullInterval)
+	}
+
+	// Repeated flags accumulate, and replace the config file's list.
+	c = parseWith(t, cfg, "server", "--pull=https://c.example", "--pull=https://d.example")
+	want = []string{"https://c.example", "https://d.example"}
+	if fmt.Sprint(c.Server.Pull) != fmt.Sprint(want) {
+		t.Errorf("pull = %q, want %q", c.Server.Pull, want)
+	}
+
+	c = parseWith(t, "", "server")
+	if len(c.Server.Pull) != 0 || c.Server.PullInterval != revs.DefaultPullInterval {
+		t.Errorf("pull = %q every %v, want none every %v", c.Server.Pull, c.Server.PullInterval, revs.DefaultPullInterval)
+	}
+}

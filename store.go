@@ -20,7 +20,8 @@ type BlobStore interface {
 // revisions of a ratings document share every unchanged line, and a
 // collection keeping its corpora in the same file shares storage too.
 type SQLiteStore struct {
-	feed *sqlitestore.Store
+	corpus *sqlitestore.DB
+	feed   *sqlitestore.Store
 }
 
 // serverFeed is the sqlitestore feed holding the server's documents.
@@ -34,7 +35,13 @@ func NewSQLiteStore(db *sql.DB) (*SQLiteStore, error) {
 		return nil, err
 	}
 
-	return &SQLiteStore{feed: d.Feed(serverFeed)}, nil
+	return &SQLiteStore{corpus: d, feed: d.Feed(serverFeed)}, nil
+}
+
+// upstreamFeed returns the sqlitestore feed holding what was pulled from
+// an upstream server. Its documents share storage with the server's own.
+func (s *SQLiteStore) upstreamFeed(url string) *sqlitestore.Store {
+	return s.corpus.Feed("upstream:" + url)
 }
 
 func (s *SQLiteStore) Put(hash string, data []byte) error {
