@@ -203,26 +203,36 @@ func TestPushPull(t *testing.T) {
 	// Alice's page of Bob lists his movie.
 	require.Contains(t, alice.get("/servers/1/users/"+bob.app.c.UserID(ctx)), "alien")
 
-	// A second device with Alice's key: its push is stale until it
-	// merges Alice's published copy.
+	// A second device with Alice's key: its push merges Alice's
+	// published copy first.
 	key := alice.app.c.PrivateKeyText(ctx)
 	alice2 := newTestUI(t, onNetwork(network))
 	alice2.post("/identity/import", url.Values{"private_key": {key}})
 	alice2.post("/servers", url.Values{"url": {sts.URL}})
 	alice2.post("/movies", url.Values{"title": {"Aliens"}, "year": {"1986"}})
-	loc, _ := alice2.post("/servers/1/push", nil)
-	require.Equal(t, "/servers/1?conflict=1", loc)
-
-	alice2.post("/servers/1/pull", nil)
-	_, msg = alice2.post("/servers/1/import-mine", nil)
-	require.Contains(t, msg, "Imported 1 new movies")
 	_, msg = alice2.post("/servers/1/push", nil)
+	require.Contains(t, msg, "Merged your collection from the server (revision 1) first. Imported 1 new movies")
 	require.Contains(t, msg, "Pushed revision 2")
 
 	sts.Cut()
 	alice.post("/servers/1/pull", nil)
 	_, msg = alice.post("/servers/1/import-mine", nil)
 	require.Contains(t, msg, "Imported 1 new movies (1 already present)")
+
+	// A copy the server hasn't published yet can't be merged: pushing
+	// again stays a conflict until it is, or until pushed anyway.
+	alice.post("/movies", url.Values{"title": {"Alien 3"}, "year": {"1992"}})
+	_, msg = alice.post("/servers/1/push", nil)
+	require.Contains(t, msg, "Pushed revision 3")
+	alice2.post("/movies", url.Values{"title": {"Prometheus"}, "year": {"2012"}})
+	for range 2 {
+		loc, _ := alice2.post("/servers/1/push", nil)
+		require.Equal(t, "/servers/1?conflict=3", loc)
+	}
+	require.Contains(t, alice2.get("/servers/1?conflict=3"), "Push anyway")
+	_, msg = alice2.post("/servers/1/push", url.Values{"force": {"1"}})
+	require.Contains(t, msg, "Pushed revision 4")
+	require.NotContains(t, msg, "Merged")
 
 	// Removing the server deletes its database.
 	alice.post("/servers/1/delete", nil)

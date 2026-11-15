@@ -490,7 +490,11 @@ func (a *App) serverPush(w http.ResponseWriter, r *http.Request) error {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), networkTimeout)
 	defer cancel()
-	res, err := a.c.Push(ctx, id)
+	push := a.c.Push
+	if r.PostFormValue("force") != "" {
+		push = a.c.ForcePush
+	}
+	res, err := push(ctx, id)
 
 	var stale *client.StaleError
 	switch {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/openrevs/revs/client"
@@ -53,6 +54,9 @@ func (c *Collection) RemoveServer(ctx context.Context, id int64) error {
 	}
 	return c.syncLocked(ctx, func() error {
 		if err := c.forgetRemote(ctx, id); err != nil {
+			return err
+		}
+		if err := c.q.DeleteSetting(ctx, unmergedKey(id)); err != nil {
 			return err
 		}
 		return c.q.DeleteServer(ctx, id)
@@ -119,10 +123,43 @@ func (c *Collection) recordServerError(ctx context.Context, id int64, err error)
 }
 
 // Push uploads the collection to a server as the author's newest
-// version. A *client.StaleError means the server holds a newer revision
-// (probably pushed from another device): the user can merge it with
-// Pull and ImportMine, or push again to overwrite it.
-func (c *Collection) Push(ctx context.Context, id int64) (*client.PushResult, error) {
+// version, first merging in any copy of the author's collection the
+// server holds that this collection hasn't seen: one pushed from
+// another device, or from this one before its data was wiped and the
+// identity imported again. Without that, the push would replace the
+// server's copy, losing whatever only it holds.
+//
+// A copy is merged from the server's pulled corpus. When the server
+// reports a newer revision than the corpus has, Push pulls and merges
+// that; a *client.StaleError means the server hasn't published it yet,
+// so it can't be merged. Pushing again after the server's next epoch
+// merges it then; ForcePush replaces it instead.
+func (c *Collection) Push(ctx context.Context, id int64) (*PushResult, error) {
+	return c.push(ctx, id, false)
+}
+
+// ForcePush uploads the collection to a server as the author's newest
+// version without merging the server's copy first, replacing it.
+func (c *Collection) ForcePush(ctx context.Context, id int64) (*PushResult, error) {
+	return c.push(ctx, id, true)
+}
+
+// PushResult reports what Push did.
+type PushResult struct {
+	*client.PushResult
+	// Merged is set when the server's copy of the author's collection
+	// was merged into the local one before pushing.
+	Merged *MergeResult
+}
+
+// MergeResult describes a copy of the author's collection merged from
+// a server.
+type MergeResult struct {
+	Rev int
+	ImportStats
+}
+
+func (c *Collection) push(ctx context.Context, id int64, force bool) (*PushResult, error) {
 	s, rem, err := c.serverRemote(ctx, id)
 	if err != nil {
 		return nil, err
@@ -131,15 +168,47 @@ func (c *Collection) Push(ctx context.Context, id int64) (*client.PushResult, er
 	if err != nil {
 		return nil, err
 	}
-	content, err := c.buildContent(ctx, c.UserID(ctx))
-	if err != nil {
-		return nil, err
-	}
+	uid := c.UserID(ctx)
 
-	var res *client.PushResult
+	res := &PushResult{}
 	err = c.syncLocked(ctx, func() error {
-		res, err = rem.client.Push(ctx, key, content)
-		return err
+		if force {
+			if err := c.q.DeleteSetting(ctx, unmergedKey(s.ID)); err != nil {
+				return err
+			}
+		}
+		for attempt := 0; ; attempt++ {
+			if !force {
+				m, err := c.mergeServerCopy(ctx, s, rem, uid)
+				if err != nil {
+					return err
+				}
+				if m != nil {
+					res.Merged = m
+				}
+			}
+			content, err := c.buildContent(ctx, uid)
+			if err != nil {
+				return err
+			}
+			pr, err := rem.client.Push(ctx, key, content)
+			var stale *client.StaleError
+			if errors.As(err, &stale) && !force {
+				// Remember the revision to merge, so a later Push doesn't
+				// assert past it before merging it.
+				if err := c.setSetting(ctx, unmergedKey(s.ID), strconv.Itoa(stale.LatestRev)); err != nil {
+					return err
+				}
+				if attempt == 0 {
+					continue
+				}
+			}
+			if err != nil {
+				return err
+			}
+			res.PushResult = pr
+			return nil
+		}
 	})
 	if err != nil {
 		c.recordServerError(context.WithoutCancel(ctx), s.ID, err)
@@ -152,12 +221,103 @@ func (c *Collection) Push(ctx context.Context, id int64) (*client.PushResult, er
 	return res, nil
 }
 
-// PushMessage describes a successful push.
-func PushMessage(res *client.PushResult) string {
-	if !res.Pushed {
-		return fmt.Sprintf("Nothing to push: the server already has this content (revision %d).", res.Rev)
+// unmergedKey is the setting holding the revision of the author's
+// collection a server reported in a stale verdict, until it has been
+// merged.
+func unmergedKey(serverID int64) string {
+	return "unmerged_rev:" + feedName(serverID)
+}
+
+// mergedKey is the setting that records that the author's document
+// with this hash, pulled from a server, has been merged, so it isn't
+// merged again (bringing back what was since deleted locally).
+func mergedKey(hash string) string {
+	return "merged_doc:" + hash
+}
+
+// mergeServerCopy merges the server's copy of the author's collection
+// into the local one, unless it is a version this collection wrote or
+// has merged before. If the server reported an unmerged revision that
+// the pulled corpus lacks, it pulls first; a *client.StaleError means
+// the server still doesn't publish it. Callers hold the sync lock.
+func (c *Collection) mergeServerCopy(ctx context.Context, s localdb.Server, rem *remote, uid string) (*MergeResult, error) {
+	unmerged := c.settingInt(ctx, unmergedKey(s.ID))
+
+	doc, err := rem.client.Document(uid)
+	if errors.Is(err, client.ErrNotFound) {
+		err = nil
 	}
-	return fmt.Sprintf("Pushed revision %d. It will appear once the server publishes its next epoch.", res.Rev)
+	if err != nil {
+		return nil, err
+	}
+	if unmerged > 0 && (doc == nil || doc.Rev < unmerged) {
+		if _, err := c.pullLocked(ctx, s); err != nil {
+			return nil, fmt.Errorf("pulling the server's newer copy of your collection to merge it: %w", err)
+		}
+		if doc, err = rem.client.Document(uid); err != nil && !errors.Is(err, client.ErrNotFound) {
+			return nil, err
+		}
+		if doc == nil || doc.Rev < unmerged {
+			return nil, &client.StaleError{UserID: uid, LatestRev: unmerged, Reason: "the server has not published it yet"}
+		}
+	}
+	if doc == nil {
+		return nil, nil
+	}
+
+	m, err := c.mergeDocument(ctx, s, doc)
+	if err != nil {
+		return nil, err
+	}
+	if unmerged > 0 {
+		if err := c.q.DeleteSetting(ctx, unmergedKey(s.ID)); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// mergeDocument merges doc, the author's own document pulled from a
+// server, unless the local collection already supersedes it: it is a
+// version this collection wrote, or has merged before, or is older
+// than a revision since pushed to the server (which either merged it
+// or, with ForcePush, chose to replace it).
+func (c *Collection) mergeDocument(ctx context.Context, s localdb.Server, doc *client.Document) (*MergeResult, error) {
+	if s.LastPushRev != nil && int64(doc.Rev) < *s.LastPushRev {
+		return nil, nil
+	}
+	if _, err := c.versions.Version(doc.UserID, doc.Hash); err == nil {
+		return nil, nil
+	} else if !errors.Is(err, client.ErrNotFound) {
+		return nil, err
+	}
+	if c.setting(ctx, mergedKey(doc.Hash)) != "" {
+		return nil, nil
+	}
+	pd, err := parseRatingset(doc.Data)
+	if err != nil {
+		return nil, fmt.Errorf("reading your collection from %s: %w", s.Url, err)
+	}
+	stats, err := c.mergeTitles(ctx, pd.Titles)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.setSetting(ctx, mergedKey(doc.Hash), strconv.Itoa(doc.Rev)); err != nil {
+		return nil, err
+	}
+	return &MergeResult{Rev: doc.Rev, ImportStats: stats}, nil
+}
+
+// PushMessage describes a successful push.
+func PushMessage(res *PushResult) string {
+	var msg string
+	if m := res.Merged; m != nil {
+		msg = fmt.Sprintf("Merged your collection from the server (revision %d) first. %s ", m.Rev, m.ImportStats)
+	}
+	if !res.Pushed {
+		return msg + fmt.Sprintf("Nothing to push: the server already has this content (revision %d).", res.Rev)
+	}
+	return msg + fmt.Sprintf("Pushed revision %d. It will appear once the server publishes its next epoch.", res.Rev)
 }
 
 // Pull syncs a server's published corpus and refreshes the index of
@@ -179,11 +339,22 @@ func (c *Collection) Pull(ctx context.Context, id int64, rebootstrap bool) (*cli
 		c.recordServerError(context.WithoutCancel(ctx), s.ID, err)
 		return nil, err
 	}
-	epoch := int64(res.Epoch)
-	if err := c.q.RecordPull(ctx, localdb.RecordPullParams{LastEpoch: &epoch, ID: s.ID}); err != nil {
+	return res, c.recordPull(ctx, s, res)
+}
+
+// pullLocked pulls a server's corpus, for callers holding the sync
+// lock.
+func (c *Collection) pullLocked(ctx context.Context, s localdb.Server) (*client.Result, error) {
+	res, err := c.pull(ctx, s.ID, s.Url, false)
+	if err != nil {
 		return nil, err
 	}
-	return res, nil
+	return res, c.recordPull(ctx, s, res)
+}
+
+func (c *Collection) recordPull(ctx context.Context, s localdb.Server, res *client.Result) error {
+	epoch := int64(res.Epoch)
+	return c.q.RecordPull(ctx, localdb.RecordPullParams{LastEpoch: &epoch, ID: s.ID})
 }
 
 // PullMessage describes a successful pull.
@@ -225,8 +396,19 @@ func (c *Collection) ImportMine(ctx context.Context, id int64) (rev int, stats I
 	if err != nil {
 		return 0, stats, err
 	}
-	stats, err = c.mergeTitles(ctx, pd.Titles)
-	return doc.Rev, stats, err
+	if stats, err = c.mergeTitles(ctx, pd.Titles); err != nil {
+		return 0, stats, err
+	}
+	// Push needn't merge it again.
+	if err := c.setSetting(ctx, mergedKey(doc.Hash), strconv.Itoa(doc.Rev)); err != nil {
+		return 0, stats, err
+	}
+	if doc.Rev >= c.settingInt(ctx, unmergedKey(id)) {
+		if err := c.q.DeleteSetting(ctx, unmergedKey(id)); err != nil {
+			return 0, stats, err
+		}
+	}
+	return doc.Rev, stats, nil
 }
 
 // UserTitle is one title in another user's pulled collection.
