@@ -200,18 +200,25 @@ func TestIdentityAndPublishing(t *testing.T) {
 	require.Contains(t, alice.screen(), "Others' reviews")
 	require.Contains(t, alice.screen(), collection.ShortID(bob.a.c.UserID(ctx)))
 
-	// A second device with Alice's key gets a conflict, then merges.
+	// A second device with Alice's key merges her published copy as it
+	// pushes.
 	alice2 := newNetHarness(t, network)
 	alice2.keys("4", "i")
 	alice2.a.prompt.input.SetValue(alice.a.c.PrivateKeyText(ctx))
 	alice2.keys("enter", "3", "a")
 	alice2.a.prompt.input.SetValue(sts.URL)
 	alice2.keys("enter", "p")
-	require.Contains(t, alice2.screen(), "newer revision")
-	alice2.keys("u", "m")
-	require.Contains(t, alice2.a.flash, "Imported 1 new movies")
-	alice2.keys("p")
+	require.Contains(t, alice2.a.flash, "Merged your collection from the server (revision 1) first. Imported 1 new movies")
 	require.Contains(t, alice2.a.flash, "Pushed revision 2")
+
+	// A copy the server hasn't published yet is a conflict, which
+	// pressing p again resolves by pushing anyway, once confirmed.
+	_, _, err := alice.a.c.AddMovie(ctx, collection.MovieInput{Title: "Aliens"})
+	require.NoError(t, err)
+	alice.keys("3", "enter", "p")
+	require.Contains(t, alice.screen(), "newer revision (2)")
+	alice.keys("p", "y")
+	require.Contains(t, alice.a.flash, "Pushed revision 3")
 
 	// Export and import.
 	dir := t.TempDir()
@@ -225,7 +232,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 	fresh.keys("5", "i")
 	fresh.a.prompt.input.SetValue(path)
 	fresh.keys("enter")
-	require.Contains(t, fresh.a.flash, "Imported 1 new movies")
+	require.Contains(t, fresh.a.flash, "Imported 2 new movies")
 }
 
 // Edits made by another process on the same data directory show up

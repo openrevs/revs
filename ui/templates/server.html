@@ -4,14 +4,12 @@
 
 {{if .Conflict}}
 <div class="flash flash-error">
-  <p><strong>The server has a newer revision ({{.Conflict}}) than you last pushed.</strong> You probably pushed from another device.</p>
-  <p>To keep both, pull and merge the server's copy into your collection, then push. Or push anyway, which replaces the server's copy with yours.</p>
+  <p><strong>The server has a newer revision ({{.Conflict}}) of your collection that it hasn't published yet</strong>, so it can't be merged into yours. You probably pushed from another device.</p>
+  <p>Push again once the server publishes its next epoch: its copy is merged into yours first, so you keep both. Or push anyway, which replaces the server's copy with yours.</p>
   <div class="actions">
-    <form method="post" action="/servers/{{.Server.ID}}/pull"><button type="submit">1. Pull</button></form>
-    <form method="post" action="/servers/{{.Server.ID}}/import-mine"><button type="submit">2. Merge server copy</button></form>
-    <form method="post" action="/servers/{{.Server.ID}}/push" onsubmit="return confirm('Replace the server copy with your local collection?')"><button type="submit" class="danger">Push anyway</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/push"><button type="submit">Push again</button></form>
+    <form method="post" action="/servers/{{.Server.ID}}/push" onsubmit="return confirm('Replace the server copy with your local collection?')"><input type="hidden" name="force" value="1"><button type="submit" class="danger">Push anyway</button></form>
   </div>
-  <p class="hint">A just-pushed revision only appears after the server publishes its next epoch, so the merge may have to wait.</p>
 </div>
 {{end}}
 {{if .Diverged}}

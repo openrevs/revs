@@ -163,11 +163,11 @@ func (s *serverScreen) update(a *app, msg tea.Msg) tea.Cmd {
 	case "p":
 		if s.problem == problemConflict {
 			a.confirmThen("Replace the server's copy with your local collection?", func(a *app) tea.Cmd {
-				return s.push(a)
+				return s.push(a, true)
 			})
 			return nil
 		}
-		return s.push(a)
+		return s.push(a, false)
 	case "u":
 		return s.pull(a, false)
 	case "b":
@@ -205,20 +205,26 @@ func (s *serverScreen) update(a *app, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (s *serverScreen) push(a *app) tea.Cmd {
+// push pushes the collection, merging the server's copy first unless
+// force is set.
+func (s *serverScreen) push(a *app, force bool) tea.Cmd {
 	if !a.c.HasKey(a.ctx) {
 		a.fail(collection.ErrNoKey)
 		return nil
 	}
 	id := s.id
+	push := a.c.Push
+	if force {
+		push = a.c.ForcePush
+	}
 	return a.run("pushing", func(ctx context.Context) func(*app) tea.Cmd {
-		res, err := a.c.Push(ctx, id)
+		res, err := push(ctx, id)
 		return func(a *app) tea.Cmd {
 			var stale *client.StaleError
 			switch {
 			case errors.As(err, &stale):
 				s.problem, s.conflict = problemConflict, stale.LatestRev
-				a.fail(fmt.Errorf("the server has a newer revision (%d) than you last pushed", stale.LatestRev))
+				a.fail(fmt.Errorf("the server has a newer revision (%d) of your collection that it hasn't published yet", stale.LatestRev))
 			case err != nil:
 				a.fail(fmt.Errorf("push failed: %w", err))
 			default:
@@ -263,10 +269,9 @@ func (s *serverScreen) banner(width int) string {
 	var text string
 	switch s.problem {
 	case problemConflict:
-		text = fmt.Sprintf("The server has a newer revision (%d) than you last pushed. You probably pushed from another device.\n\n"+
-			"To keep both, press u to pull, then m to merge the server's copy into your collection, then p to push. "+
-			"Or press p now to push anyway, replacing the server's copy with yours.\n\n"+
-			"A just-pushed revision only appears after the server publishes its next epoch, so the merge may have to wait.", s.conflict)
+		text = fmt.Sprintf("The server has a newer revision (%d) of your collection that it hasn't published yet, so it can't be merged into yours. You probably pushed from another device.\n\n"+
+			"Wait for the server to publish its next epoch, then press u to pull, m to merge its copy into yours, and p to push. "+
+			"Or press p now to push anyway, replacing the server's copy with yours.", s.conflict)
 	case problemDiverged:
 		text = "Your copy of this server's data no longer matches what it publishes. No published update applies to it, which can mean local corruption or that the server rewrote its history.\n\n" +
 			"Press b to re-download from a snapshot."
