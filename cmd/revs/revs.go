@@ -67,9 +67,10 @@ func (tuiCmd) Help() string {
 }
 
 type uiCmd struct {
-	DataDir   string `name:"data" help:"Data directory" default:"${revs_home}" type:"path"`
-	Listen    string `help:"HTTP listen address" default:"${default_ui_listen}"`
-	NoBrowser bool   `help:"Don't open a web browser"`
+	DataDir     string `name:"data" help:"Data directory" default:"${revs_home}" type:"path"`
+	Listen      string `help:"HTTP listen address" default:"${default_ui_listen}"`
+	NoBrowser   bool   `help:"Don't open a web browser"`
+	LogRequests bool   `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
 }
 
 func (uiCmd) Help() string {
@@ -94,6 +95,7 @@ type serverCmd struct {
 	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
 	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
 	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
+	LogRequests   bool          `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
 }
 
 func (serverCmd) Help() string {
@@ -108,9 +110,10 @@ func (serverCmd) Help() string {
 }
 
 type clientCmd struct {
-	DataDir string `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	Listen  string `help:"HTTP listen address" default:"${default_client_listen}"`
-	Demo    bool   `help:"Insert demo data"`
+	DataDir     string `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
+	Listen      string `help:"HTTP listen address" default:"${default_client_listen}"`
+	Demo        bool   `help:"Insert demo data"`
+	LogRequests bool   `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
 }
 
 func (clientCmd) Help() string {
@@ -128,6 +131,7 @@ type clientServerCmd struct {
 	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
 	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
 	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
+	LogRequests   bool          `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
 }
 
 func (clientServerCmd) Help() string {
@@ -270,10 +274,11 @@ func main() {
 			CompactEvery:  nonNil(CLI.Server.CompactEvery),
 			Pull:          CLI.Server.Pull,
 			PullInterval:  CLI.Server.PullInterval,
+			LogRequests:   CLI.Server.LogRequests,
 		})
 	case "client":
 		ensureDir(CLI.Client.DataDir)
-		revs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo)
+		revs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo, CLI.Client.LogRequests)
 	case "clientserver":
 		ensureDir(CLI.ClientServer.DataDir)
 		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
@@ -284,8 +289,9 @@ func main() {
 			CompactEvery:  nonNil(CLI.ClientServer.CompactEvery),
 			Pull:          CLI.ClientServer.Pull,
 			PullInterval:  CLI.ClientServer.PullInterval,
+			LogRequests:   CLI.ClientServer.LogRequests,
 		})
-		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo)
+		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo, CLI.ClientServer.LogRequests)
 	case "tui":
 		if err := tui.Run(tui.Options{DataDir: CLI.TUI.DataDir}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -299,6 +305,7 @@ func main() {
 			DataDir:     CLI.UI.DataDir,
 			Listen:      CLI.UI.Listen,
 			OpenBrowser: !CLI.UI.NoBrowser,
+			LogRequests: CLI.UI.LogRequests,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "revs ui:", err)

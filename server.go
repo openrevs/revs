@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/internal/httplog"
 	"log/slog"
 )
 
@@ -58,6 +59,8 @@ type Server struct {
 	pullInterval time.Duration
 	upstreams    []*upstream
 	pullMu       sync.Mutex
+
+	logRequests bool
 }
 
 // ServerOptions overrides server tunables. Zero values keep the
@@ -75,6 +78,10 @@ type ServerOptions struct {
 	// every PullInterval.
 	Pull         []string
 	PullInterval time.Duration
+
+	// LogRequests logs every HTTP request served (method, path, status,
+	// size, duration); never bodies.
+	LogRequests bool
 }
 
 // ServerConfig holds everything a Server depends on. NewServer builds
@@ -146,6 +153,7 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 		partSize:      DefaultPartSize,
 		compactEvery:  slices.Clone(DefaultCompactEvery),
 		pullInterval:  DefaultPullInterval,
+		logRequests:   cfg.LogRequests,
 	}
 	if s.httpClient == nil {
 		s.httpClient = &http.Client{Timeout: upstreamTimeout}
@@ -226,6 +234,9 @@ func (s *Server) SetSnapshotEvery(n int) {
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	s.routes(r)
+	if s.logRequests {
+		return httplog.Middleware(nil, r)
+	}
 	return r
 }
 

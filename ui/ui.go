@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/internal/httplog"
 )
 
 // DefaultListen is the default address for `revs ui`.
@@ -31,6 +32,9 @@ type Options struct {
 	WikidataURL string
 	// HTTPClient is used to talk to servers (for tests).
 	HTTPClient *http.Client
+	// LogRequests logs every HTTP request served (method, path, status,
+	// size, duration); never bodies.
+	LogRequests bool
 }
 
 type App struct {
@@ -71,8 +75,12 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	handler := app.Handler(isLoopback(ln.Addr()))
+	if opts.LogRequests {
+		handler = httplog.Middleware(nil, handler)
+	}
 	srv := &http.Server{
-		Handler:           app.Handler(isLoopback(ln.Addr())),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

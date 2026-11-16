@@ -9,6 +9,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/internal/httplog"
 	"github.com/openrevs/revs/templates"
 )
 
@@ -62,7 +63,9 @@ func (c *Client) loadSettings() error {
 
 const DefaultClientListen = ":1324"
 
-func Start(dataDir, listen string, demo bool) {
+// Start runs the web client. With logRequests, every request served is
+// logged (method, path, status, size, duration; never bodies).
+func Start(dataDir, listen string, demo, logRequests bool) {
 	client, err := NewClient(dataDir)
 	if err != nil {
 		panic(err)
@@ -72,7 +75,11 @@ func Start(dataDir, listen string, demo bool) {
 	if listen == "" {
 		listen = DefaultClientListen
 	}
-	log.Fatal(http.ListenAndServe(listen, client.sessions.LoadAndSave(client.router)))
+	var h http.Handler = client.sessions.LoadAndSave(client.router)
+	if logRequests {
+		h = httplog.Middleware(nil, h)
+	}
+	log.Fatal(http.ListenAndServe(listen, h))
 }
 
 // handlerFunc is an http handler that may return an error, which is rendered
