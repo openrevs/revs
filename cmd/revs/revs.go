@@ -447,8 +447,9 @@ func addNewMovie() error {
 	}
 	text = strings.TrimSpace(text)
 
-	conf.Titles = append(conf.Titles, revs.Title2{
-		Name: text,
+	conf.Items = append(conf.Items, revs.Item{
+		Type:  revs.ItemTypeMovie,
+		Title: text,
 	})
 
 	d, err := yaml.Marshal(conf)

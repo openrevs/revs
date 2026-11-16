@@ -298,7 +298,7 @@ func (c *Collection) mergeDocument(ctx context.Context, s localdb.Server, doc *c
 	if err != nil {
 		return nil, fmt.Errorf("reading your collection from %s: %w", s.Url, err)
 	}
-	stats, err := c.mergeTitles(ctx, pd.Titles)
+	stats, err := c.mergeItems(ctx, pd.Items)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +396,7 @@ func (c *Collection) ImportMine(ctx context.Context, id int64) (rev int, stats I
 	if err != nil {
 		return 0, stats, err
 	}
-	if stats, err = c.mergeTitles(ctx, pd.Titles); err != nil {
+	if stats, err = c.mergeItems(ctx, pd.Items); err != nil {
 		return 0, stats, err
 	}
 	// Push needn't merge it again.

@@ -306,16 +306,23 @@ func TestImportUnsignedDraft(t *testing.T) {
 	ctx := context.Background()
 
 	// A `revs tui` draft: unsigned, refs keyed in other cases, a
-	// non-movie title, and a TMDB slug.
+	// non-movie item, a TMDB slug, the author line not first, and items
+	// that are invalid under the ratingset spec (no type, an
+	// out-of-range rating, a bad date, a blank title).
 	draft := strings.Join([]string{
+		`{"entries":[{"date":"2020-01-01","rating":5,"review":"wow"},{"rating":4}],"refs":{"IMDb":"tt0110912","TMDB":"680-pulp-fiction"},"title":"Pulp Fiction","type":"Movie","year":1994}`,
 		`{"id":"abc","max_rating":5,"min_rating":0}`,
-		`{"name":"Pulp Fiction","year":1994,"refs":{"TMDB":"680-pulp-fiction","IMDb":"tt0110912"},"reviews":[{"date":"2020-01-01","rating":5,"comment":"wow"},{"rating":4}]}`,
-		`{"type":"book","name":"Dune"}`,
+		`{"title":"Dune","type":"book"}`,
+		`{"title":"Rocky","year":1976}`,
+		`{"entries":[{"rating":6}],"title":"Rocky","type":"movie"}`,
+		`{"entries":[{"date":"2020-02-30"}],"title":"Rocky","type":"movie"}`,
+		`{"title":"  ","type":"movie"}`,
 	}, "\n")
 
 	_, msg := u.upload([]byte(draft))
 	require.Contains(t, msg, "Imported 1 new movies (0 already present) and 2 new viewings")
 	require.Contains(t, msg, "Skipped 1 non-movie titles")
+	require.Contains(t, msg, "Skipped 4 invalid titles")
 
 	m, err := u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
@@ -326,12 +333,17 @@ func TestImportUnsignedDraft(t *testing.T) {
 	require.Equal(t, "tt0110912", *m.ImdbID)
 
 	// A later import matching by id fills in missing ids.
-	_, msg = u.upload([]byte(`{"name":"Pulp Fiction (1994)","refs":{"imdb":"tt0110912","wikidata":"Q104123"}}`))
+	_, msg = u.upload([]byte(`{"refs":{"imdb":"tt0110912","wikidata":"Q104123"},"title":"Pulp Fiction (1994)","type":"movie"}`))
 	require.Contains(t, msg, "0 new movies (1 already present)")
 	m, err = u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "Q104123", *m.WikidataID)
 	require.Equal(t, "Pulp Fiction", m.Title, "an existing title is kept")
+
+	// Items whose refs conflict (a shared key with a different value)
+	// are kept apart, even when another ref or the title and year agree.
+	_, msg = u.upload([]byte(`{"refs":{"imdb":"tt0110912","tmdb":"999"},"title":"Pulp Fiction","type":"movie","year":1994}`))
+	require.Contains(t, msg, "1 new movies (0 already present)")
 }
 
 func TestImportCSV(t *testing.T) {

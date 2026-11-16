@@ -3,7 +3,6 @@ package collection
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -105,41 +104,47 @@ func (c *Collection) reindex(ctx context.Context, r *remote, userIDs []string, a
 	return tx.Commit()
 }
 
-// indexDocument records one verified document's titles and reviews.
-// Lines that don't parse as titles are skipped rather than failing the
-// whole index: other people's documents may use fields this client
-// doesn't know.
+// indexDocument records one verified document's items and entries.
+// Following the ratingset spec, a document whose author line lacks a
+// valid rating scale is indexed with no items, and item lines that
+// don't parse or are invalid are skipped rather than failing the whole
+// index. Items of types other than movie are skipped too.
 func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc *client.Document) error {
-	var titles []revs.Title2
-	scale := ratingScale{legacyMin, legacyMax}
+	var items []revs.Item
 	lines := bytes.Split(doc.Data, []byte("\n"))
-	for _, line := range lines[min(1, len(lines)):] { // skip the control line
-		if len(line) == 0 {
-			continue
-		}
+	lines = lines[min(1, len(lines)):] // skip the control line
+
+	var scale ratingScale
+	validScale := false
+	for _, line := range lines {
 		if gjson.GetBytes(line, "id").Exists() {
-			scale = scaleOf(line)
-			continue
+			var err error
+			scale, err = scaleOf(line)
+			validScale = err == nil
 		}
-		var t revs.Title2
-		if err := json.Unmarshal(line, &t); err != nil || t.Name == "" {
-			continue
+	}
+	if validScale {
+		for _, line := range lines {
+			if len(line) == 0 || gjson.GetBytes(line, "id").Exists() {
+				continue
+			}
+			it, ok := readItem(line, scale)
+			if !ok || !it.IsType(revs.ItemTypeMovie) {
+				continue
+			}
+			items = append(items, it)
 		}
-		if t.Type != nil && *t.Type != "" && !strings.EqualFold(*t.Type, titleTypeMovie) {
-			continue
-		}
-		titles = append(titles, t)
 	}
 
 	err := q.InsertIndexedUser(ctx, localdb.InsertIndexedUserParams{
-		ServerID: serverID, Userid: doc.UserID, Rev: int64(doc.Rev), Hash: doc.Hash, TitleCount: int64(len(titles)),
+		ServerID: serverID, Userid: doc.UserID, Rev: int64(doc.Rev), Hash: doc.Hash, TitleCount: int64(len(items)),
 	})
 	if err != nil {
 		return err
 	}
 
-	for _, t := range titles {
-		p := localdb.InsertIndexedTitleParams{ServerID: serverID, Userid: doc.UserID, Name: t.Name}
+	for _, t := range items {
+		p := localdb.InsertIndexedTitleParams{ServerID: serverID, Userid: doc.UserID, Name: strings.TrimSpace(t.Title)}
 		if t.Year != nil {
 			y := int64(*t.Year)
 			p.Year = &y
@@ -158,11 +163,11 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 		if err != nil {
 			return err
 		}
-		for _, rv := range t.Reviews {
+		for _, rv := range t.Entries {
 			rp := localdb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date}
 			rp.Rating = scale.scale(rv.Rating)
-			if rv.Comment != nil {
-				rp.Comment = *rv.Comment
+			if rv.Review != nil {
+				rp.Comment = *rv.Review
 			}
 			if err := q.InsertIndexedReview(ctx, rp); err != nil {
 				return err

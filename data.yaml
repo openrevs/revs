@@ -1,34 +1,36 @@
-user:
+author:
   id: abc123
   minrating: 0
   maxrating: 5
-titles:
-  - name: Ghostbusters
+  revision: 1
+items:
+  - type: movie
+    title: Ghostbusters
     year: 1984
-    TMDB_ID: 123
     refs:
       imdb: tt0087332
       tmdb: 123
-  - name: Pulp Fiction
+  - type: movie
+    title: Pulp Fiction
     year: 1994
-    TMDB_ID: 680
-    reviews:
+    entries:
       - rating: 4
         date: 2023-03-24
-        comment: |
+        review: |
           This is a multi-line review.
           It's pretty cool.
       - rating: 5
         date: 1999-03-24
-        comment: Great movie!
-  - name: Rocky Balboa
+        review: Great movie!
+  - type: movie
+    title: Rocky Balboa
     year: 2006
     refs:
-      imdb_id: tt0479143
-    reviews:
+      imdb: tt0479143
+    entries:
       - rating: 3
         date: 2023-03-27
-        comment: >
+        review: >
           Mildly enjoyable, mainly because of the nostalgia factor (which the film leans into
           explicity). The production was fine and like the Marie character, but the main issue
           was that the plot lacked any kinda of nemesis. The inevitable opponent (Mason Dixon)

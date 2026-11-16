@@ -20,17 +20,15 @@ import (
 )
 
 const (
-	titleTypeMovie = "movie"
-
-	// Keys of a title line's "refs" object.
+	// Keys of a movie item's "refs" object.
 	refIMDB     = "imdb"
 	refTMDB     = "tmdb"
 	refWikidata = "wikidata"
 )
 
 // buildContent renders the whole local collection as the unsigned data
-// lines of a ratingset: one user line, then one line per movie with its
-// viewings as reviews. This is exactly the input client.Push expects.
+// lines of a ratingset: one author line, then one item line per movie
+// with its viewings as entries. This is exactly the input client.Push expects.
 // Lines are deterministic for unchanged data, and byte-identical
 // duplicates (which sjsonl cannot sign) are dropped — they carry no
 // information.
@@ -49,7 +47,7 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 		byMovie[v.MovieID] = append(byMovie[v.MovieID], v)
 	}
 
-	user, err := json.Marshal(revs.User2{ID: userID, MinRating: MinRating, MaxRating: MaxRating})
+	user, err := revs.EncodeLine(revs.Author{ID: userID, MinRating: MinRating, MaxRating: MaxRating})
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +58,7 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 
 	seen := map[string]bool{}
 	for _, m := range movies {
-		line, err := json.Marshal(titleFromMovie(m, byMovie[m.ID]))
+		line, err := revs.EncodeLine(itemFromMovie(m, byMovie[m.ID]).Normalize())
 		if err != nil {
 			return nil, err
 		}
@@ -75,9 +73,8 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 	return buf.Bytes(), nil
 }
 
-func titleFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Title2 {
-	typ := titleTypeMovie
-	t := revs.Title2{Type: &typ, Name: m.Title}
+func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Item {
+	t := revs.Item{Type: revs.ItemTypeMovie, Title: m.Title}
 	if m.Year != nil {
 		y := int(*m.Year)
 		t.Year = &y
@@ -95,16 +92,16 @@ func titleFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Title2 {
 
 	// Oldest first, undated first; AllViewings already orders by date then id.
 	for _, v := range viewings {
-		r := revs.Review2{Date: v.ViewedOn}
+		e := revs.Entry{Date: v.ViewedOn}
 		if v.Rating != nil {
 			n := int(*v.Rating)
-			r.Rating = &n
+			e.Rating = &n
 		}
 		if v.Review != "" {
-			c := v.Review
-			r.Comment = &c
+			r := v.Review
+			e.Review = &r
 		}
-		t.Reviews = append(t.Reviews, r)
+		t.Entries = append(t.Entries, e)
 	}
 
 	return t
@@ -165,16 +162,21 @@ func (c *Collection) commitExport(ctx context.Context, key ed25519.PrivateKey, u
 
 // parsedDoc is a ratingset read for import.
 type parsedDoc struct {
-	UserID string // empty for an unsigned file without a user line
+	UserID string // empty for an unsigned file without an author line
 	Signed bool
-	Titles []revs.Title2
+	Items  []revs.Item
+	// Invalid counts item lines skipped as invalid.
+	Invalid int
 }
 
 // parseRatingset reads a ratingset for import. A signed sjsonl document
-// is fully verified (signature, and user id matching the signing key);
-// an unsigned file of data lines is accepted as is. Ratings are
-// converted from the scale the user line declares to half stars; a
-// file without one is taken to use whole stars (0–5).
+// is fully verified (signature, one author line with a valid rating
+// scale, and an author id matching the signing key); an unsigned file
+// of data lines is accepted as is, though an author line in it must
+// still declare a valid scale. Item lines that are invalid under the
+// ratingset spec are skipped and counted. Ratings are converted from
+// the document's scale to half stars; an unsigned file without an
+// author line is taken to use whole stars (0–5).
 func parseRatingset(data []byte) (*parsedDoc, error) {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
@@ -183,7 +185,6 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 
 	first, _, _ := bytes.Cut(data, []byte("\n"))
 	pd := &parsedDoc{}
-	scale := ratingScale{legacyMin, legacyMax}
 	lines := bytes.Split(data, []byte("\n"))
 
 	if gjson.GetBytes(first, "sjsonl").Exists() {
@@ -196,6 +197,9 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 		lines = lines[1:]
 	}
 
+	// Find the scale first: the author line may come anywhere.
+	scale := ratingScale{legacyMin, legacyMax}
+	authorSeen := false
 	for i, line := range lines {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -204,31 +208,39 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 		if !json.Valid(line) {
 			return nil, fmt.Errorf("line %d: invalid JSON", i+1)
 		}
-		if id := gjson.GetBytes(line, "id"); id.Exists() {
-			if pd.UserID == "" {
-				pd.UserID = id.String()
-				scale = scaleOf(line)
-			}
+		if !gjson.GetBytes(line, "id").Exists() {
 			continue
 		}
-		var t revs.Title2
-		if err := json.Unmarshal(line, &t); err != nil {
-			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		if authorSeen {
+			return nil, errors.New("multiple author lines")
 		}
-		pd.Titles = append(pd.Titles, t)
+		authorSeen = true
+		s, err := scaleOf(line)
+		if err != nil {
+			return nil, err
+		}
+		scale = s
+		pd.UserID = gjson.GetBytes(line, "id").String()
 	}
 
-	// Convert ratings to half stars (the user line comes first, so the
-	// scale is known by now).
-	for _, t := range pd.Titles {
-		for i, r := range t.Reviews {
-			if n := scale.scale(r.Rating); n != nil {
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || gjson.GetBytes(line, "id").Exists() {
+			continue
+		}
+		it, ok := readItem(line, scale)
+		if !ok {
+			pd.Invalid++
+			continue
+		}
+		// Convert ratings to half stars.
+		for i, e := range it.Entries {
+			if n := scale.scale(e.Rating); n != nil {
 				v := int(*n)
-				t.Reviews[i].Rating = &v
-			} else {
-				t.Reviews[i].Rating = nil
+				it.Entries[i].Rating = &v
 			}
 		}
+		pd.Items = append(pd.Items, it)
 	}
 
 	return pd, nil
@@ -241,6 +253,7 @@ type ImportStats struct {
 	ViewingsAdded  int
 	ViewingsKept   int
 	SkippedNonFilm int
+	SkippedInvalid int
 }
 
 // ErrUnreadableFile is returned by Import for a file that isn't a valid
@@ -275,16 +288,17 @@ func (r ImportResult) String() string {
 }
 
 // Import merges a ratingset file into the collection: a signed sjsonl
-// document, which must verify, or unsigned data lines. See mergeTitles.
+// document, which must verify, or unsigned data lines. See mergeItems.
 func (c *Collection) Import(ctx context.Context, data []byte) (ImportResult, error) {
 	pd, err := parseRatingset(data)
 	if err != nil {
 		return ImportResult{}, unreadableFile{err}
 	}
-	stats, err := c.mergeTitles(ctx, pd.Titles)
+	stats, err := c.mergeItems(ctx, pd.Items)
 	if err != nil {
 		return ImportResult{}, err
 	}
+	stats.SkippedInvalid += pd.Invalid
 	uid := c.UserID(ctx)
 	return ImportResult{ImportStats: stats, ForeignUser: pd.UserID != "" && uid != "" && pd.UserID != uid}, nil
 }
@@ -295,15 +309,19 @@ func (s ImportStats) String() string {
 	if s.SkippedNonFilm > 0 {
 		msg += fmt.Sprintf(" Skipped %d non-movie titles.", s.SkippedNonFilm)
 	}
+	if s.SkippedInvalid > 0 {
+		msg += fmt.Sprintf(" Skipped %d invalid titles.", s.SkippedInvalid)
+	}
 	return msg
 }
 
-// mergeTitles adds titles and reviews to the local collection without
-// removing or overwriting anything. A title matches an existing movie
-// by Wikidata, IMDb, or TMDB id, else by title and year; missing ids
-// are filled in on a match. A review is added unless the movie already
-// has a viewing with the same date, rating, and text.
-func (c *Collection) mergeTitles(ctx context.Context, titles []revs.Title2) (ImportStats, error) {
+// mergeItems adds movie items and their entries to the local collection
+// without removing or overwriting anything. Items are expected to be
+// valid (see revs.Item.Validate), with ratings in half stars. An item
+// matches an existing movie as findMovie describes; missing ids are
+// filled in on a match. An entry is added unless the movie already has
+// a viewing with the same date, rating, and text.
+func (c *Collection) mergeItems(ctx context.Context, items []revs.Item) (ImportStats, error) {
 	var stats ImportStats
 
 	tx, err := c.db.BeginTx(ctx, nil)
@@ -313,13 +331,14 @@ func (c *Collection) mergeTitles(ctx context.Context, titles []revs.Title2) (Imp
 	defer tx.Rollback()
 	q := c.q.WithTx(tx)
 
-	for _, t := range titles {
-		if t.Type != nil && *t.Type != "" && !strings.EqualFold(*t.Type, titleTypeMovie) {
+	for _, t := range items {
+		if !t.IsType(revs.ItemTypeMovie) {
 			stats.SkippedNonFilm++
 			continue
 		}
-		name := strings.TrimSpace(t.Name)
+		name := strings.TrimSpace(t.Title)
 		if name == "" {
+			stats.SkippedInvalid++
 			continue
 		}
 
@@ -366,7 +385,7 @@ func (c *Collection) mergeTitles(ctx context.Context, titles []revs.Title2) (Imp
 		if err != nil {
 			return stats, err
 		}
-		for _, r := range t.Reviews {
+		for _, r := range t.Entries {
 			v := localdb.CreateViewingParams{MovieID: m.ID}
 			if r.Date != nil && *r.Date != "" {
 				v.ViewedOn = r.Date
@@ -375,8 +394,8 @@ func (c *Collection) mergeTitles(ctx context.Context, titles []revs.Title2) (Imp
 				n := int64(*r.Rating)
 				v.Rating = &n
 			}
-			if r.Comment != nil {
-				v.Review = *r.Comment
+			if r.Review != nil {
+				v.Review = *r.Review
 			}
 			if slices.ContainsFunc(existing, func(e localdb.Viewing) bool { return sameViewing(e, v) }) {
 				stats.ViewingsKept++
@@ -398,15 +417,18 @@ func sameViewing(e localdb.Viewing, v localdb.CreateViewingParams) bool {
 	return ptrEq(e.ViewedOn, v.ViewedOn) && ptrEq(e.Rating, v.Rating) && e.Review == v.Review
 }
 
-// findMovie looks up an existing movie for in by external ids, then by
-// title and year.
+// findMovie looks up an existing movie for in by external ids (in the
+// spec's preference order: IMDb, Wikidata, TMDB), then by title and
+// year. Following the ratingset spec's matching rule, a candidate whose
+// ids conflict with in's (a shared ref key with a different value) is
+// never a match: the two are kept apart.
 func findMovie(ctx context.Context, q *localdb.Queries, in MovieInput) (localdb.Movie, bool, error) {
 	lookups := []func() (localdb.Movie, error){}
-	if in.Wikidata != nil {
-		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByWikidata(ctx, in.Wikidata) })
-	}
 	if in.IMDB != nil {
 		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByIMDB(ctx, in.IMDB) })
+	}
+	if in.Wikidata != nil {
+		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByWikidata(ctx, in.Wikidata) })
 	}
 	if in.TMDB != nil {
 		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByTMDB(ctx, in.TMDB) })
@@ -423,9 +445,21 @@ func findMovie(ctx context.Context, q *localdb.Queries, in MovieInput) (localdb.
 		if err != nil {
 			return m, false, err
 		}
+		if refsConflict(m, in) {
+			continue
+		}
 		return m, true, nil
 	}
 	return localdb.Movie{}, false, nil
+}
+
+// refsConflict reports whether m and in have a ref key in common whose
+// values differ.
+func refsConflict(m localdb.Movie, in MovieInput) bool {
+	differ := func(a, b *string) bool {
+		return a != nil && b != nil && *a != "" && *b != "" && *a != *b
+	}
+	return differ(m.ImdbID, in.IMDB) || differ(m.WikidataID, in.Wikidata) || differ(m.TmdbID, in.TMDB)
 }
 
 func ptrEq[T comparable](a, b *T) bool {

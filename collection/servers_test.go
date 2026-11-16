@@ -111,3 +111,39 @@ func TestServersShareDatabase(t *testing.T) {
 	}
 	require.Empty(t, movie())
 }
+
+// Pulled reviews match a local movie by a shared id or by title and
+// year, but never when the two have a shared id with different values.
+func TestOthersReviewsConflictingRefs(t *testing.T) {
+	ctx := context.Background()
+	network := revstest.NewNetwork(t)
+	srv := network.NewServer()
+
+	author := network.NewAuthor()
+	m, _, err := author.AddMovie(ctx, collection.MovieInput{Title: "Alien", Year: ptr[int64](1979), IMDB: ptr("tt0078748")})
+	require.NoError(t, err)
+	_, err = author.AddViewing(ctx, m.ID, collection.ViewingInput{Rating: ptr[int64](10)})
+	require.NoError(t, err)
+	s, err := author.AddServer(ctx, srv.URL)
+	require.NoError(t, err)
+	_, err = author.Push(ctx, s.ID)
+	require.NoError(t, err)
+	srv.Cut()
+
+	reader := network.NewAuthor()
+	rs, err := reader.AddServer(ctx, srv.URL)
+	require.NoError(t, err)
+	_, err = reader.Pull(ctx, rs.ID, false)
+	require.NoError(t, err)
+
+	reviews := func(in collection.MovieInput) []collection.OtherReview {
+		rm, _, err := reader.AddMovie(ctx, in)
+		require.NoError(t, err)
+		got, err := reader.OthersReviews(ctx, rm)
+		require.NoError(t, err)
+		return got
+	}
+	require.Len(t, reviews(collection.MovieInput{Title: "Alien", Year: ptr[int64](1979)}), 1, "title and year")
+	require.Len(t, reviews(collection.MovieInput{Title: "Alien (1979)", IMDB: ptr("tt0078748")}), 1, "shared id")
+	require.Empty(t, reviews(collection.MovieInput{Title: "Alien", Year: ptr[int64](1979), IMDB: ptr("tt0090605")}), "conflicting id")
+}

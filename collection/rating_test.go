@@ -38,17 +38,28 @@ func TestRatingScale(t *testing.T) {
 		in   int
 		want *int64
 	}{
-		{`{"id":"x"}`, 4, ptr(int64(8))},                                // undeclared: whole stars
-		{`{"id":"x","min_rating":0,"max_rating":5}`, 5, ptr(int64(10))}, // legacy
+		{`{"id":"x","min_rating":0,"max_rating":5}`, 5, ptr(int64(10))}, // whole stars
 		{`{"id":"x","min_rating":0,"max_rating":10}`, 7, ptr(int64(7))}, // ours
 		{`{"id":"x","min_rating":1,"max_rating":10}`, 10, ptr(int64(10))},
 		{`{"id":"x","min_rating":1,"max_rating":10}`, 1, ptr(int64(0))},
 		{`{"id":"x","min_rating":0,"max_rating":100}`, 73, ptr(int64(7))}, // rounds to nearest half star
 		{`{"id":"x","min_rating":0,"max_rating":5}`, 6, nil},              // out of range
-		{`{"id":"x","min_rating":5,"max_rating":5}`, 4, ptr(int64(8))},    // nonsense: whole stars
 	}
 	for _, c := range cases {
-		require.Equal(t, c.want, scaleOf([]byte(c.user)).scale(r(c.in)), "%s %d", c.user, c.in)
+		s, err := scaleOf([]byte(c.user))
+		require.NoError(t, err, c.user)
+		require.Equal(t, c.want, s.scale(r(c.in)), "%s %d", c.user, c.in)
+	}
+
+	// An author line without a valid scale is invalid.
+	for _, bad := range []string{
+		`{"id":"x"}`,
+		`{"id":"x","max_rating":10}`,
+		`{"id":"x","min_rating":5,"max_rating":5}`,
+		`{"id":"x","min_rating":0,"max_rating":"10"}`,
+	} {
+		_, err := scaleOf([]byte(bad))
+		require.Error(t, err, bad)
 	}
 }
 

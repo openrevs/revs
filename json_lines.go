@@ -3,7 +3,6 @@ package revs
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 
 	"github.com/go-playground/validator/v10"
@@ -11,17 +10,9 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-type User2 struct {
-	ID        string  `json:"id" validate:"required"`
-	Email     *string `json:"email,omitempty"`
-	MinRating int     `json:"min_rating"`
-	MaxRating int     `json:"max_rating"`
-	Revision  int     `json:"revision,omitempty"`
-}
-
 type Example struct {
-	User   User2
-	Titles []Title2
+	Author Author
+	Items  []Item
 }
 
 func ConvertYAML(data, privateKey []byte) (*Example, error) {
@@ -37,15 +28,15 @@ func ConvertYAML(data, privateKey []byte) (*Example, error) {
 
 	var buf bytes.Buffer
 
-	d, err := json.Marshal(conf.User)
+	d, err := EncodeLine(conf.Author)
 	if err != nil {
 		return nil, err
 	}
 	buf.Write(d)
 	buf.WriteByte('\n')
 
-	for _, title := range conf.Titles {
-		d, err = json.Marshal(title)
+	for _, item := range conf.Items {
+		d, err = EncodeLine(item.Normalize())
 		if err != nil {
 			return nil, err
 		}

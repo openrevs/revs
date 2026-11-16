@@ -241,6 +241,9 @@ WHERE t.userid != ?1
     OR (CAST(?3 AS TEXT) IS NOT NULL AND t.imdb_id = CAST(?3 AS TEXT))
     OR (CAST(?4 AS TEXT) IS NOT NULL AND t.tmdb_id = CAST(?4 AS TEXT))
     OR (t.name = ?5 COLLATE NOCASE AND t.year IS ?6))
+  AND (t.wikidata_id IS NULL OR CAST(?2 AS TEXT) IS NULL OR t.wikidata_id = CAST(?2 AS TEXT))
+  AND (t.imdb_id IS NULL OR CAST(?3 AS TEXT) IS NULL OR t.imdb_id = CAST(?3 AS TEXT))
+  AND (t.tmdb_id IS NULL OR CAST(?4 AS TEXT) IS NULL OR t.tmdb_id = CAST(?4 AS TEXT))
 ORDER BY t.server_id, r.viewed_on IS NULL, r.viewed_on DESC
 `
 
@@ -265,6 +268,8 @@ type MatchingReviewsRow struct {
 
 // Other users' reviews of a title, from every server: matched by any
 // shared external id, or by exact title (case-insensitive) and year.
+// Titles whose ids conflict (a shared id with a different value) never
+// match, per the ratingset spec.
 func (q *Queries) MatchingReviews(ctx context.Context, arg MatchingReviewsParams) ([]MatchingReviewsRow, error) {
 	rows, err := q.db.QueryContext(ctx, matchingReviews,
 		arg.ExcludeUser,

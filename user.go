@@ -5,10 +5,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -140,37 +140,35 @@ func (c *Client) generateRatingsFile(ctx context.Context, user *domain.User) ([]
 		return nil, err
 	}
 
-	// One line per title, with all of the user's reviews of it attached.
-	titleIdx := map[int]int{}
-	var titles []Title2
+	// One item line per title, with all of the user's entries for it.
+	itemIdx := map[int]int{}
+	var items []Item
 	for _, r := range ratings {
-		idx, ok := titleIdx[r.Title.ID]
+		idx, ok := itemIdx[r.Title.ID]
 		if !ok {
-			t := Title2{
-				Name: r.Title.Name,
-			}
+			it := Item{Type: ItemTypeMovie, Title: r.Title.Name}
 			if r.Title.Type != "" {
-				t.Type = util.StrPtr(r.Title.Type)
+				it.Type = strings.ToLower(r.Title.Type)
 			}
 			if r.Title.Year != 0 {
-				t.Year = util.IntPtr(r.Title.Year)
+				it.Year = util.IntPtr(r.Title.Year)
 			}
 			if r.Title.TMDBID != 0 {
-				t.Refs = map[string]string{"TMDB": strconv.Itoa(r.Title.TMDBID)}
+				it.Refs = map[string]string{"tmdb": strconv.Itoa(r.Title.TMDBID)}
 			}
-			titles = append(titles, t)
-			idx = len(titles) - 1
-			titleIdx[r.Title.ID] = idx
+			items = append(items, it)
+			idx = len(items) - 1
+			itemIdx[r.Title.ID] = idx
 		}
 
-		review := Review2{
-			Rating:  r.Rating,
-			Comment: r.Comment,
+		entry := Entry{
+			Rating: r.Rating,
+			Review: r.Comment,
 		}
 		if r.Date != nil {
-			review.Date = util.StrPtr(r.Date.Format(time.RFC3339))
+			entry.Date = util.StrPtr(r.Date.Format(time.DateOnly))
 		}
-		titles[idx].Reviews = append(titles[idx].Reviews, review)
+		items[idx].Entries = append(items[idx].Entries, entry)
 	}
 
 	// TODO: bump the rev only when content actually changed. For now every
@@ -181,22 +179,22 @@ func (c *Client) generateRatingsFile(ctx context.Context, user *domain.User) ([]
 	}
 
 	var buf bytes.Buffer
-	userLine := User2{
+	// The author line carries no identifying details such as email.
+	authorLine := Author{
 		ID:        user.Userid,
-		Email:     user.Email,
 		MinRating: user.Minrating,
 		MaxRating: user.Maxrating,
 		Revision:  user.Revision,
 	}
-	d, err := json.Marshal(userLine)
+	d, err := EncodeLine(authorLine)
 	if err != nil {
 		return nil, err
 	}
 	buf.Write(d)
 	buf.WriteByte('\n')
 
-	for _, t := range titles {
-		d, err := json.Marshal(t)
+	for _, it := range items {
+		d, err := EncodeLine(it.Normalize())
 		if err != nil {
 			return nil, err
 		}

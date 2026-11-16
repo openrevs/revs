@@ -6,10 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/openrevs/revs/keys"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/tidwall/gjson"
+	"golang.org/x/text/unicode/norm"
 )
 
 type User struct {
@@ -55,48 +59,188 @@ func (u User) Keys() (string, string) {
 	return pub, prv
 }
 
-type Title2 struct {
-	Type    *string           `json:"type,omitempty"`
-	Name    string            `json:"name,omitempty" validate:"required"`
-	Year    *int              `json:"year,omitempty"`
-	Refs    map[string]string `json:"refs,omitempty"`
-	Reviews []Review2         `json:"reviews,omitempty" yaml:",omitempty"`
-}
-type Review2 struct {
-	Date    *string `json:"date,omitempty"`
-	Rating  *int    `json:"rating,omitempty"`
-	Comment *string `json:"comment,omitempty"`
+// The lines of a ratingset (https://openrevs.org/specs/ratingset/).
+// Struct fields are declared in lexicographic order of their JSON keys,
+// so encoding/json emits them in the order the line encoding requires.
+
+// Author is a ratingset's author line. It carries no identifying
+// details beyond the key-derived ID.
+type Author struct {
+	ID        string `json:"id" validate:"required"`
+	MaxRating int    `json:"max_rating"`
+	MinRating int    `json:"min_rating"`
+	Revision  int    `json:"revision,omitempty"`
 }
 
-// ParseRatingset verifies a signed sjsonl ratingset and returns its user line
-// and the parsed document. The user line's ID must match the signing key.
-func ParseRatingset(data []byte) (*User2, *jsonlines.JSONL, error) {
+// ItemTypeMovie is the only item type defined so far.
+const ItemTypeMovie = "movie"
+
+// Item is a ratingset's item line: one item and the author's entries
+// for it.
+type Item struct {
+	Entries []Entry           `json:"entries,omitempty" yaml:",omitempty"`
+	Refs    map[string]string `json:"refs,omitempty" yaml:",omitempty"`
+	Title   string            `json:"title" validate:"required"`
+	Type    string            `json:"type"`
+	Year    *int              `json:"year,omitempty" yaml:",omitempty"`
+}
+
+// Entry is one occasion of the author engaging with an item, such as
+// one viewing of a movie.
+type Entry struct {
+	Date   *string `json:"date,omitempty" yaml:",omitempty"`
+	Rating *int    `json:"rating,omitempty" yaml:",omitempty"`
+	Review *string `json:"review,omitempty" yaml:",omitempty"`
+}
+
+// ParseAuthorLine reads an author line. It must have a string id and a
+// valid rating scale: integer min_rating and max_rating, with max_rating
+// greater than min_rating.
+func ParseAuthorLine(line []byte) (Author, error) {
+	var a Author
+	if !gjson.ValidBytes(line) || !gjson.ParseBytes(line).IsObject() {
+		return a, errors.New("author line is not a JSON object")
+	}
+	if gjson.GetBytes(line, "id").Type != gjson.String {
+		return a, errors.New("author line id is not a string")
+	}
+	for _, f := range []string{"min_rating", "max_rating"} {
+		if !gjson.GetBytes(line, f).Exists() {
+			return a, fmt.Errorf("author line has no %s", f)
+		}
+	}
+	if err := json.Unmarshal(line, &a); err != nil {
+		return a, fmt.Errorf("author line: %w", err)
+	}
+	if a.MaxRating <= a.MinRating {
+		return a, errors.New("author line max_rating must be greater than min_rating")
+	}
+	return a, nil
+}
+
+// ParseItemLine reads an item line, without validating its contents
+// (see Item.Validate). A line with an "id" member is an author line,
+// not an item line.
+func ParseItemLine(line []byte) (Item, error) {
+	var it Item
+	if !gjson.ValidBytes(line) || !gjson.ParseBytes(line).IsObject() {
+		return it, errors.New("item line is not a JSON object")
+	}
+	if gjson.GetBytes(line, "id").Exists() {
+		return it, errors.New("item line has an id")
+	}
+	if err := json.Unmarshal(line, &it); err != nil {
+		return it, err
+	}
+	return it, nil
+}
+
+// Validate checks an item against the ratingset spec, reading ratings
+// against the document's scale minRating..maxRating. An invalid item is
+// skipped by consumers.
+func (it Item) Validate(minRating, maxRating int) error {
+	if it.Type == "" {
+		return errors.New("item has no type")
+	}
+	if strings.TrimSpace(it.Title) == "" {
+		return errors.New("item has no title")
+	}
+	for _, e := range it.Entries {
+		if e.Rating != nil && (*e.Rating < minRating || *e.Rating > maxRating) {
+			return fmt.Errorf("rating %d is outside the scale %d..%d", *e.Rating, minRating, maxRating)
+		}
+		if e.Date != nil && !ValidDate(*e.Date) {
+			return fmt.Errorf("date %q is not a valid YYYY-MM-DD date", *e.Date)
+		}
+	}
+	return nil
+}
+
+// IsType reports whether the item is of type typ, ignoring case.
+func (it Item) IsType(typ string) bool {
+	return strings.EqualFold(it.Type, typ)
+}
+
+// ValidDate reports whether s is a calendar date in YYYY-MM-DD form.
+func ValidDate(s string) bool {
+	if len(s) != len(time.DateOnly) {
+		return false
+	}
+	_, err := time.Parse(time.DateOnly, s)
+	return err == nil
+}
+
+// Normalize returns a copy of the item with its strings in Unicode NFC,
+// as the line encoding requires of generators.
+func (it Item) Normalize() Item {
+	out := it
+	out.Title = norm.NFC.String(it.Title)
+	out.Type = norm.NFC.String(it.Type)
+	if it.Refs != nil {
+		out.Refs = make(map[string]string, len(it.Refs))
+		for k, v := range it.Refs {
+			out.Refs[norm.NFC.String(k)] = norm.NFC.String(v)
+		}
+	}
+	if it.Entries != nil {
+		out.Entries = make([]Entry, len(it.Entries))
+		for i, e := range it.Entries {
+			if e.Review != nil {
+				r := norm.NFC.String(*e.Review)
+				e.Review = &r
+			}
+			out.Entries[i] = e
+		}
+	}
+	return out
+}
+
+// EncodeLine encodes one ratingset line as the line encoding asks of
+// generators: compact JSON, keys sorted (for the types in this package,
+// by declaration order), and no escaping of <, >, or & beyond what
+// JSON requires.
+func EncodeLine(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// ParseRatingset verifies a signed sjsonl ratingset and returns its
+// author line and the parsed document. The document must have exactly
+// one author line, with a valid rating scale and an ID matching the
+// signing key. Item lines are not checked.
+func ParseRatingset(data []byte) (*Author, *jsonlines.JSONL, error) {
 	doc, err := jsonlines.Parse(data)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var user *User2
+	var author *Author
 	lines := bytes.Split(data, []byte("\n"))
 	for _, line := range lines[1:] { // skip the control line
 		if !gjson.GetBytes(line, "id").Exists() {
 			continue
 		}
-		if user != nil {
-			return nil, nil, errors.New("multiple user lines")
+		if author != nil {
+			return nil, nil, errors.New("multiple author lines")
 		}
-		user = &User2{}
-		if err := json.Unmarshal(line, user); err != nil {
+		a, err := ParseAuthorLine(line)
+		if err != nil {
 			return nil, nil, err
 		}
+		author = &a
 	}
-	if user == nil {
-		return nil, nil, errors.New("user line not found")
-	}
-
-	if userID(doc.Info().SignerKey) != user.ID {
-		return nil, nil, errors.New("user id does not match signing key")
+	if author == nil {
+		return nil, nil, errors.New("author line not found")
 	}
 
-	return user, doc, nil
+	if userID(doc.Info().SignerKey) != author.ID {
+		return nil, nil, errors.New("author id does not match signing key")
+	}
+
+	return author, doc, nil
 }

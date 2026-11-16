@@ -6,11 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tidwall/gjson"
+	"github.com/openrevs/revs"
 )
 
-// legacyMin and legacyMax are the scale assumed for a ratingset that
-// doesn't declare one: whole stars, as this client used to publish.
+// legacyMin and legacyMax are the scale assumed for an unsigned import
+// file with no author line: whole stars, as this client used to
+// publish. (A signed ratingset must declare its scale.)
 const (
 	legacyMin = 0
 	legacyMax = 5
@@ -50,18 +51,18 @@ func FormatStars(n int64) string {
 // ratingScale is the rating range a ratingset declares.
 type ratingScale struct{ min, max int }
 
-// scaleOf reads the scale from a user line, falling back to the legacy
-// whole-star scale when it is missing or nonsensical.
-func scaleOf(userLine []byte) ratingScale {
-	lo, hi := gjson.GetBytes(userLine, "min_rating"), gjson.GetBytes(userLine, "max_rating")
-	if !hi.Exists() || hi.Int() <= lo.Int() {
-		return ratingScale{legacyMin, legacyMax}
+// scaleOf reads the scale from an author line. An author line without a
+// valid scale makes the document invalid.
+func scaleOf(authorLine []byte) (ratingScale, error) {
+	a, err := revs.ParseAuthorLine(authorLine)
+	if err != nil {
+		return ratingScale{}, err
 	}
-	return ratingScale{int(lo.Int()), int(hi.Int())}
+	return ratingScale{a.MinRating, a.MaxRating}, nil
 }
 
 // scale converts a rating on s to half stars, rounding to the nearest
-// half star. Ratings outside s are dropped.
+// half star. Ratings outside s are dropped (valid items have none).
 func (s ratingScale) scale(r *int) *int64 {
 	if r == nil || *r < s.min || *r > s.max {
 		return nil
@@ -69,4 +70,15 @@ func (s ratingScale) scale(r *int) *int64 {
 	n := int64(math.Round(float64(*r-s.min) * float64(MaxRating-MinRating) / float64(s.max-s.min)))
 	n += MinRating
 	return &n
+}
+
+// readItem parses and validates an item line against the document's
+// scale. ok is false for a line that isn't a valid item, which
+// consumers skip.
+func readItem(line []byte, s ratingScale) (it revs.Item, ok bool) {
+	it, err := revs.ParseItemLine(line)
+	if err != nil || it.Validate(s.min, s.max) != nil {
+		return revs.Item{}, false
+	}
+	return it, true
 }

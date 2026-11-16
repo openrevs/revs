@@ -11,8 +11,8 @@ import (
 func TestParseRatingset(t *testing.T) {
 	u := NewUser()
 
-	doc := `{"id":"` + u.ID + `","min_rating":0,"max_rating":5,"revision":3}
-{"name":"Pulp Fiction","year":1995}
+	doc := `{"title":"Pulp Fiction","type":"movie","year":1995}
+{"id":"` + u.ID + `","max_rating":5,"min_rating":0,"revision":3}
 `
 	signed, _, err := jsonlines.Sign([]byte(doc), u.PrivateKey)
 	assert.NoError(t, err)
@@ -28,15 +28,22 @@ func TestParseRatingset(t *testing.T) {
 	_, _, err = ParseRatingset(tampered)
 	assert.Error(t, err)
 
-	// A user line whose ID doesn't match the signing key must be rejected.
-	badDoc := `{"id":"0000000000000000000000000000000000000000000000000000000000000000","min_rating":0,"max_rating":5}` + "\n"
-	signedBad, _, err := jsonlines.Sign([]byte(badDoc), u.PrivateKey)
-	assert.NoError(t, err)
-	_, _, err = ParseRatingset(signedBad)
-	assert.Error(t, err)
+	// Invalid author lines must be rejected: an ID that doesn't match
+	// the signing key, no valid rating scale, or a second author line.
+	for _, bad := range []string{
+		`{"id":"0000000000000000000000000000000000000000000000000000000000000000","max_rating":5,"min_rating":0}` + "\n",
+		`{"id":"` + u.ID + `","revision":1}` + "\n",
+		`{"id":"` + u.ID + `","max_rating":5,"min_rating":5}` + "\n",
+		`{"id":"` + u.ID + `","max_rating":5,"min_rating":0}` + "\n" + `{"id":"` + u.ID + `","max_rating":10,"min_rating":0}` + "\n",
+	} {
+		signedBad, _, err := jsonlines.Sign([]byte(bad), u.PrivateKey)
+		assert.NoError(t, err)
+		_, _, err = ParseRatingset(signedBad)
+		assert.Error(t, err, bad)
+	}
 
-	// A document with no user line must be rejected.
-	noUser := `{"name":"Pulp Fiction","year":1995}` + "\n"
+	// A document with no author line must be rejected.
+	noUser := `{"title":"Pulp Fiction","type":"movie","year":1995}` + "\n"
 	signedNoUser, _, err := jsonlines.Sign([]byte(noUser), u.PrivateKey)
 	assert.NoError(t, err)
 	_, _, err = ParseRatingset(signedNoUser)
@@ -49,4 +56,47 @@ func TestUser_ValidIDs(t *testing.T) {
 
 	u.ID = "abc"
 	assert.False(t, u.ValidIDs())
+}
+
+func TestItemValidate(t *testing.T) {
+	cases := map[string]bool{
+		`{"title":"Rocky","type":"movie"}`:                                               true,
+		`{"entries":[{}],"title":"Rocky","type":"MOVIE","x":1}`:                          true,
+		`{"entries":[{"date":"2024-02-29","rating":10}],"title":"Rocky","type":"movie"}`: true,
+		`{"title":"Rocky"}`:                                                  false, // no type
+		`{"title":" ","type":"movie"}`:                                       false, // blank title
+		`{"entries":[{"rating":11}],"title":"Rocky","type":"movie"}`:         false,
+		`{"entries":[{"rating":-1}],"title":"Rocky","type":"movie"}`:         false,
+		`{"entries":[{"date":"2023-02-29"}],"title":"Rocky","type":"movie"}`: false,
+		`{"entries":[{"date":"2023-2-1"}],"title":"Rocky","type":"movie"}`:   false,
+		`{"entries":[{"rating":7.5}],"title":"Rocky","type":"movie"}`:        false,
+		`{"id":"x","title":"Rocky","type":"movie"}`:                          false,
+		`[1]`: false,
+	}
+	for line, want := range cases {
+		it, err := ParseItemLine([]byte(line))
+		if err == nil {
+			err = it.Validate(0, 10)
+		}
+		assert.Equal(t, want, err == nil, "%s: %v", line, err)
+	}
+}
+
+func TestEncodeLine(t *testing.T) {
+	y, r, rv := 1994, 9, "Tom & Jerry <3 Ame\u0301lie"
+	d := "1997-07-07"
+	it := Item{
+		Type:    ItemTypeMovie,
+		Title:   "Ame\u0301lie",
+		Year:    &y,
+		Refs:    map[string]string{"wikidata": "Q104123", "imdb": "tt0110912"},
+		Entries: []Entry{{Date: &d, Rating: &r, Review: &rv}, {}},
+	}
+	line, err := EncodeLine(it.Normalize())
+	assert.NoError(t, err)
+	assert.Equal(t, `{"entries":[{"date":"1997-07-07","rating":9,"review":"Tom & Jerry <3 Amélie"},{}],"refs":{"imdb":"tt0110912","wikidata":"Q104123"},"title":"Amélie","type":"movie","year":1994}`, string(line))
+
+	line, err = EncodeLine(Author{ID: "abc", MinRating: 0, MaxRating: 10, Revision: 4})
+	assert.NoError(t, err)
+	assert.Equal(t, `{"id":"abc","max_rating":10,"min_rating":0,"revision":4}`, string(line))
 }

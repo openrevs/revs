@@ -30,7 +30,7 @@ var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, cs
 // naming the columns; only title is required. Each row is one movie,
 // and a row with a rating or view date also records a viewing of it.
 // Every row is validated before anything is returned.
-func parseCSV(data []byte) ([]revs.Title2, error) {
+func parseCSV(data []byte) ([]revs.Item, error) {
 	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")) // spreadsheet BOM
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, errors.New("file is empty")
@@ -61,7 +61,7 @@ func parseCSV(data []byte) ([]revs.Title2, error) {
 		return nil, fmt.Errorf("header must include a %q column (supported: %s)", csvTitle, strings.Join(csvColumns, ", "))
 	}
 
-	var titles []revs.Title2
+	var titles []revs.Item
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
@@ -90,7 +90,7 @@ func parseCSV(data []byte) ([]revs.Title2, error) {
 			return nil, fmt.Errorf("line %d: %s", line, strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 
-		t := revs.Title2{Name: in.Title}
+		t := revs.Item{Type: revs.ItemTypeMovie, Title: in.Title}
 		if in.Year != nil {
 			y := int(*in.Year)
 			t.Year = &y
@@ -106,12 +106,12 @@ func parseCSV(data []byte) ([]revs.Title2, error) {
 			t.Refs = refs
 		}
 		if vin.Date != nil || vin.Rating != nil {
-			rv := revs.Review2{Date: vin.Date}
+			e := revs.Entry{Date: vin.Date}
 			if vin.Rating != nil {
 				n := int(*vin.Rating)
-				rv.Rating = &n
+				e.Rating = &n
 			}
-			t.Reviews = []revs.Review2{rv}
+			t.Entries = []revs.Entry{e}
 		}
 		titles = append(titles, t)
 	}
@@ -140,12 +140,12 @@ func imdbNoTT(s string, imdb *string) (*string, error) {
 }
 
 // ImportCSV merges a CSV file of movies into the collection (see
-// parseCSV for the format, and mergeTitles for how it merges). A file
+// parseCSV for the format, and mergeItems for how it merges). A file
 // that fails to parse changes nothing and yields an ErrUnreadableFile.
 func (c *Collection) ImportCSV(ctx context.Context, data []byte) (ImportStats, error) {
 	titles, err := parseCSV(data)
 	if err != nil {
 		return ImportStats{}, unreadableFile{err}
 	}
-	return c.mergeTitles(ctx, titles)
+	return c.mergeItems(ctx, titles)
 }
