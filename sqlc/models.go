@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-type AppDatum struct {
-	Key   string
-	Value string
-}
-
 type Artifact struct {
 	Channel    string
 	Kind       string
@@ -42,43 +37,4 @@ type Document struct {
 	Size         int
 	ReceivedTime time.Time
 	Source       string
-}
-
-type Rating struct {
-	RatingID int
-	TitleID  int
-	UserID   int
-	Rating   *int
-	Comment  *string
-	Date     *time.Time
-	Updated  time.Time
-}
-
-type Session struct {
-	Token  string
-	Data   []byte
-	Expiry float64
-}
-
-type Title struct {
-	TitleID       int
-	Type          string
-	Name          string
-	Year          int
-	TmdbID        int
-	TmdbPosterUrl string
-}
-
-type User struct {
-	UserID      int
-	Login       string
-	Password    []byte
-	Email       *string
-	Userid      string
-	Publickey   []byte
-	Privatekey  []byte
-	Minrating   int
-	Maxrating   int
-	Revision    int
-	Showposters bool
 }

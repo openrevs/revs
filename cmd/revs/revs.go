@@ -14,13 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/go-playground/validator/v10"
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/ratingset"
+	"github.com/openrevs/revs/server"
 	"github.com/openrevs/revs/tui"
 	"github.com/openrevs/revs/ui"
 	jsonlines "github.com/openrevs/sjsonl-go"
@@ -43,9 +43,7 @@ type cli struct {
 	UI     uiCmd     `cmd:"" name:"ui" group:"common" help:"Manage your movies and reviews in a local web UI"`
 	Keygen keygenCmd `cmd:"" group:"common" help:"Generate a new identity keypair"`
 
-	Server       serverCmd       `cmd:"" group:"servers" help:"Run a ratings publishing server"`
-	Client       clientCmd       `cmd:"" group:"servers" help:"Run the local web client"`
-	ClientServer clientServerCmd `cmd:"" name:"clientserver" group:"servers" help:"Run the web client and a server together"`
+	Server serverCmd `cmd:"" group:"servers" help:"Run a ratings publishing server"`
 
 	Sign   signCmd   `cmd:"" group:"documents" help:"Sign a ratings document"`
 	Verify verifyCmd `cmd:"" group:"documents" help:"Check a signed document's signature"`
@@ -107,36 +105,6 @@ func (serverCmd) Help() string {
 		"server each came from. The data directory holds the server's identity " +
 		"key, its document store and the published tree; back it up to keep the " +
 		"server's identity."
-}
-
-type clientCmd struct {
-	DataDir     string `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	Listen      string `help:"HTTP listen address" default:"${default_client_listen}"`
-	Demo        bool   `help:"Insert demo data"`
-	LogRequests bool   `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
-}
-
-func (clientCmd) Help() string {
-	return "Serves the web client from the given data directory."
-}
-
-type clientServerCmd struct {
-	DataDir       string        `name:"data" help:"Data directory" default:"${revs_home}/server" type:"path"`
-	ServerListen  string        `help:"Server HTTP listen address" default:"${default_server_listen}"`
-	ClientListen  string        `help:"Client HTTP listen address" default:"${default_client_listen}"`
-	Demo          bool          `help:"Insert demo data"`
-	CutInterval   time.Duration `help:"Epoch cut interval" default:"${default_cut_interval}"`
-	SnapshotEvery int           `help:"Publish a full snapshot every N epochs" default:"${default_snapshot_every}"`
-	PartSize      int           `help:"Target size in bytes of each snapshot and patch archive part" default:"${default_part_size}"`
-	CompactEvery  []int         `help:"Epoch intervals at which patches are compacted into aligned ranges (comma separated)" default:"${default_compact_every}"`
-	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
-	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
-	LogRequests   bool          `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
-}
-
-func (clientServerCmd) Help() string {
-	return "Runs \"revs server\" and \"revs client\" in one process, sharing a data " +
-		"directory. Handy for local development."
 }
 
 type signCmd struct {
@@ -239,14 +207,13 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 		kong.Configuration(configResolver, configPaths...),
 		kong.Vars{
 			"revs_home":              revsHome(),
-			"default_server_listen":  revs.DefaultServerListen,
-			"default_client_listen":  revs.DefaultClientListen,
+			"default_server_listen":  server.DefaultListen,
 			"default_ui_listen":      ui.DefaultListen,
-			"default_cut_interval":   revs.DefaultCutInterval.String(),
-			"default_snapshot_every": strconv.Itoa(revs.DefaultSnapshotEvery),
-			"default_part_size":      strconv.Itoa(revs.DefaultPartSize),
-			"default_compact_every":  joinInts(revs.DefaultCompactEvery),
-			"default_pull_interval":  revs.DefaultPullInterval.String(),
+			"default_cut_interval":   server.DefaultCutInterval.String(),
+			"default_snapshot_every": strconv.Itoa(server.DefaultSnapshotEvery),
+			"default_part_size":      strconv.Itoa(server.DefaultPartSize),
+			"default_compact_every":  joinInts(server.DefaultCompactEvery),
+			"default_pull_interval":  server.DefaultPullInterval.String(),
 		},
 	)
 }
@@ -265,33 +232,19 @@ func main() {
 
 	switch ctx.Command() {
 	case "server":
-		ensureDir(CLI.Server.DataDir)
-		revs.Start2(CLI.Server.DataDir, revs.ServerOptions{
-			Listen:        CLI.Server.Listen,
-			CutInterval:   CLI.Server.CutInterval,
-			SnapshotEvery: CLI.Server.SnapshotEvery,
-			PartSize:      CLI.Server.PartSize,
-			CompactEvery:  nonNil(CLI.Server.CompactEvery),
-			Pull:          CLI.Server.Pull,
-			PullInterval:  CLI.Server.PullInterval,
-			LogRequests:   CLI.Server.LogRequests,
+		c := CLI.Server
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		srv := openServer(c.DataDir, server.Options{
+			CutInterval:   c.CutInterval,
+			SnapshotEvery: c.SnapshotEvery,
+			PartSize:      c.PartSize,
+			CompactEvery:  nonNil(c.CompactEvery),
+			Pull:          c.Pull,
+			PullInterval:  c.PullInterval,
+			LogRequests:   c.LogRequests,
 		})
-	case "client":
-		ensureDir(CLI.Client.DataDir)
-		revs.Start(CLI.Client.DataDir, CLI.Client.Listen, CLI.Client.Demo, CLI.Client.LogRequests)
-	case "clientserver":
-		ensureDir(CLI.ClientServer.DataDir)
-		go revs.Start2(CLI.ClientServer.DataDir, revs.ServerOptions{
-			Listen:        CLI.ClientServer.ServerListen,
-			CutInterval:   CLI.ClientServer.CutInterval,
-			SnapshotEvery: CLI.ClientServer.SnapshotEvery,
-			PartSize:      CLI.ClientServer.PartSize,
-			CompactEvery:  nonNil(CLI.ClientServer.CompactEvery),
-			Pull:          CLI.ClientServer.Pull,
-			PullInterval:  CLI.ClientServer.PullInterval,
-			LogRequests:   CLI.ClientServer.LogRequests,
-		})
-		revs.Start(CLI.ClientServer.DataDir, CLI.ClientServer.ClientListen, CLI.ClientServer.Demo, CLI.ClientServer.LogRequests)
+		exitIfErr("revs server", srv.ListenAndServe(ctx, c.Listen))
 	case "tui":
 		if err := tui.Run(tui.Options{DataDir: CLI.TUI.DataDir}); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -313,7 +266,7 @@ func main() {
 		}
 
 	case "keygen":
-		u := revs.NewUser()
+		u := ratingset.NewUser()
 		pub, prv := u.Keys()
 
 		fmt.Printf("ID:          %s\n", u.ID)
@@ -327,9 +280,9 @@ func main() {
 		}
 		pk, err := keys.ParsePrivate(CLI.YAML.PrivateKey)
 		parser.FatalIfErrorf(err, "--private-key")
-		if _, err := revs.ConvertYAML(data, pk); err != nil {
-			panic(err)
-		}
+		signed, err := ratingset.ConvertYAML(data, pk)
+		exitIfErr("revs yaml", err)
+		os.Stdout.Write(signed)
 
 	case "sign <input>", "sign <input> <output>":
 		data, err := io.ReadAll(CLI.Sign.Input)
@@ -421,6 +374,23 @@ func signDocument(data []byte, key ed25519.PrivateKey) ([]byte, error) {
 	return signed, err
 }
 
+// openServer opens the server in dataDir, creating the directory if
+// needed, or exits.
+func openServer(dataDir string, opts server.Options) *server.Server {
+	ensureDir(dataDir)
+	srv, err := server.Open(dataDir, opts)
+	exitIfErr("revs", err)
+	return srv
+}
+
+// exitIfErr prints err, prefixed by what failed, and exits non-zero.
+func exitIfErr(what string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", what, err)
+		os.Exit(1)
+	}
+}
+
 // ensureDir creates a server data directory if it doesn't exist yet,
 // as the tui and ui commands do for theirs.
 func ensureDir(path string) {
@@ -437,7 +407,7 @@ func addNewMovie() error {
 	}
 	validate := validator.New()
 
-	var conf revs.Example
+	var conf ratingset.Example
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		return err
 	}
@@ -454,8 +424,8 @@ func addNewMovie() error {
 	}
 	text = strings.TrimSpace(text)
 
-	conf.Items = append(conf.Items, revs.Item{
-		Type:  revs.ItemTypeMovie,
+	conf.Items = append(conf.Items, ratingset.Item{
+		Type:  ratingset.ItemTypeMovie,
 		Title: text,
 	})
 

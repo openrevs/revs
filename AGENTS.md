@@ -16,6 +16,29 @@ When a code change affects documented behavior (CLI flags, config keys,
 the upload/publish protocol, the UI), update the matching page in the
 website repo. Don't add a `docs/` directory here.
 
+## Package layout
+
+The server and client halves are importable on their own, so another
+application can build on either without the other (issue #15). The
+`revs` binary in `cmd/revs` is just one consumer: it should only use
+what the packages export, and anything it needs belongs in a package's
+API, not in `cmd/revs`.
+
+- `ratingset`, `keys`: the document format and identities, shared by
+  both halves. They depend on nothing else in the module.
+- `server`: the publishing server. `server.Open` or `server.New` builds
+  one; mount `Handler` and call `Run`, or call `ListenAndServe`.
+- `client` (and `client/sqlitestore`, `client/fsstore`): the sync
+  protocol client: pulling, verifying, and pushing documents.
+- `collection`: the local data layer client apps are built on (movies,
+  viewings, identity, servers, push/pull), over `client`.
+- `ui`, `tui`: the local web and terminal apps, over `collection`.
+- `revstest`: the in-process multi-server test harness.
+
+`internal/layout` has a test that fails if these depend on each other
+in the wrong direction (e.g. `collection` reaching `server`). Update its
+rules deliberately if the layering changes.
+
 ## Testing
 
 `go test ./...` runs everything; no test needs extra processes or a

@@ -15,22 +15,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/fsstore"
 	"github.com/openrevs/revs/client/sqlitestore"
 	"github.com/openrevs/revs/domain"
 	revkeys "github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/server"
 	"github.com/stretchr/testify/require"
 )
 
 // startServer runs a real revs server over httptest. The client package
 // has no dependency on the server package; this test package uses both,
 // which is exactly the interop being tested.
-func startServer(t *testing.T) (*revs.Server, *httptest.Server) {
+func startServer(t *testing.T) (*server.Server, *httptest.Server) {
 	t.Helper()
 
-	s, err := revs.NewServer(t.TempDir())
+	s, err := server.Open(t.TempDir(), server.Options{})
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(s.Handler())
@@ -240,7 +240,7 @@ func TestStalePush(t *testing.T) {
 
 // cut runs a cut and returns the main channel's new epoch (0 if it
 // didn't change).
-func cut(t *testing.T, s *revs.Server) int {
+func cut(t *testing.T, s *server.Server) int {
 	t.Helper()
 
 	epochs, err := s.Cut(context.Background())
@@ -728,7 +728,7 @@ func TestManifestSkipsDownloads(t *testing.T) {
 	// A patch whose documents arrived some other way is skipped too:
 	// the direct channel holds the same documents as main.
 	*paths = nil
-	res, err = newClientAt(t, rec.URL, dir, client.WithChannel(revs.ChannelDirect)).Sync(ctx)
+	res, err = newClientAt(t, rec.URL, dir, client.WithChannel(server.ChannelDirect)).Sync(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Epoch)
 	require.Empty(t, archivePaths(*paths))
