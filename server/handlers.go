@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"bytes"
@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/ratingset"
 	"github.com/openrevs/revs/util"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
@@ -103,7 +105,7 @@ func (s *Server) acceptDocument(ctx context.Context, body []byte, latest *domain
 		}, "", 0
 	}
 
-	user, doc, err := ParseRatingset(body)
+	user, doc, err := ratingset.ParseRatingset(body)
 	if err != nil {
 		return http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: err.Error()}, "", 0
 	}
@@ -217,5 +219,5 @@ func patchControl(body []byte) (uploadPatch, bool, error) {
 		return uploadPatch{}, true, errors.New("patch must be signed by a valid ed25519 key")
 	}
 
-	return uploadPatch{Base: ctl.Base, userID: userID(ed25519.PublicKey(key))}, true, nil
+	return uploadPatch{Base: ctl.Base, userID: keys.UserID(ed25519.PublicKey(key))}, true, nil
 }

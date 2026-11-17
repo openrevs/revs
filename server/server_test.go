@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"archive/tar"
@@ -19,6 +19,7 @@ import (
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/ratingset"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,12 +36,12 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	_, key, err := ed25519.GenerateKey(nil)
 	require.NoError(t, err)
 
-	s, err := NewServerFromConfig(ServerConfig{
+	s, err := New(Config{
 		DB:           db,
 		Key:          key,
 		Publications: &MemPublications{},
 		// Exercise the snapshot path on every cut.
-		ServerOptions: ServerOptions{SnapshotEvery: 1},
+		Options: Options{SnapshotEvery: 1},
 	})
 	require.NoError(t, err)
 
@@ -51,7 +52,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 }
 
 // signedDoc builds a signed ratingset for u with the given rev and titles.
-func signedDoc(t *testing.T, u User, rev int, titles ...string) []byte {
+func signedDoc(t *testing.T, u ratingset.User, rev int, titles ...string) []byte {
 	t.Helper()
 
 	var buf bytes.Buffer
@@ -217,7 +218,7 @@ func titles(n int, prefix string) []string {
 
 func TestUploadVerdicts(t *testing.T) {
 	_, ts := newTestServer(t)
-	u := NewUser()
+	u := ratingset.NewUser()
 
 	// Garbage is rejected outright.
 	resp := upload(t, ts, []byte("not a ratingset"))
@@ -261,7 +262,7 @@ func TestPublishingRoundTrip(t *testing.T) {
 	assert.Equal(t, keys.EncodePublic(pub), idx.ServerKey)
 	assert.Equal(t, keys.UserID(pub), idx.ServerID)
 
-	u1, u2 := NewUser(), NewUser()
+	u1, u2 := ratingset.NewUser(), ratingset.NewUser()
 	many := titles(40, "Movie")
 	doc1 := signedDoc(t, u1, 1, many...)
 	doc2 := signedDoc(t, u2, 1, "Alien")
@@ -365,7 +366,7 @@ func TestMultiPartArchives(t *testing.T) {
 	s.partSize = 1 // every entry overflows the target: one entry per part
 	ctx := context.Background()
 
-	users := []User{NewUser(), NewUser(), NewUser()}
+	users := []ratingset.User{ratingset.NewUser(), ratingset.NewUser(), ratingset.NewUser()}
 	for i, u := range users {
 		require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u, 1, fmt.Sprintf("Movie %d", i))).StatusCode)
 	}
@@ -407,7 +408,7 @@ func TestPatchCompaction(t *testing.T) {
 	s.compactEvery = []int{2, 4}
 	ctx := context.Background()
 
-	u1, u2 := NewUser(), NewUser()
+	u1, u2 := ratingset.NewUser(), ratingset.NewUser()
 	many := titles(40, "Movie")
 	docs := map[int][]byte{}
 	for rev := 1; rev <= 4; rev++ {
@@ -452,7 +453,7 @@ func TestChannelRemoval(t *testing.T) {
 	rejected := map[string]bool{}
 	require.NoError(t, s.AddChannel("vetted", func(d *domain.Document) bool { return !rejected[d.Userid] }))
 
-	u1, u2 := NewUser(), NewUser()
+	u1, u2 := ratingset.NewUser(), ratingset.NewUser()
 	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u1, 1, "Alien")).StatusCode)
 	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, u2, 1, "Heat")).StatusCode)
 	cut, err := s.Cut(ctx)
@@ -490,11 +491,11 @@ func TestDirectChannel(t *testing.T) {
 	s, ts := newTestServer(t)
 	ctx := context.Background()
 
-	direct := NewUser()
+	direct := ratingset.NewUser()
 	require.Equal(t, http.StatusOK, upload(t, ts, signedDoc(t, direct, 1, "Alien")).StatusCode)
 
 	// A document that arrived from another server.
-	relayed := NewUser()
+	relayed := ratingset.NewUser()
 	canon, hash := canonical(t, signedDoc(t, relayed, 1, "Heat"))
 	require.NoError(t, s.docs.Put(hash, canon))
 	require.NoError(t, s.dal.AddDocument(ctx, &domain.Document{
@@ -530,8 +531,8 @@ func diff(t *testing.T, base, target []byte) []byte {
 func TestPatchUpload(t *testing.T) {
 	s, ts := newTestServer(t)
 	ctx := context.Background()
-	u := NewUser()
-	other := NewUser()
+	u := ratingset.NewUser()
+	other := ratingset.NewUser()
 
 	rev1 := signedDoc(t, u, 1, "Alien")
 	rev2 := signedDoc(t, u, 2, "Alien", "Heat")
@@ -595,7 +596,7 @@ func TestPatchUpload(t *testing.T) {
 
 func TestUploadSizeLimits(t *testing.T) {
 	_, ts := newTestServer(t)
-	u := NewUser()
+	u := ratingset.NewUser()
 
 	// titles returns n distinct title lines of about 64 bytes each,
 	// starting at index from.

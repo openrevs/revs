@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection/localdb"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/ratingset"
 	"github.com/tidwall/gjson"
 )
 
@@ -47,7 +47,7 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 		byMovie[v.MovieID] = append(byMovie[v.MovieID], v)
 	}
 
-	user, err := revs.EncodeLine(revs.Author{ID: userID, MinRating: MinRating, MaxRating: MaxRating})
+	user, err := ratingset.EncodeLine(ratingset.Author{ID: userID, MinRating: MinRating, MaxRating: MaxRating})
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 
 	seen := map[string]bool{}
 	for _, m := range movies {
-		line, err := revs.EncodeLine(itemFromMovie(m, byMovie[m.ID]).Normalize())
+		line, err := ratingset.EncodeLine(itemFromMovie(m, byMovie[m.ID]).Normalize())
 		if err != nil {
 			return nil, err
 		}
@@ -73,8 +73,8 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 	return buf.Bytes(), nil
 }
 
-func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Item {
-	t := revs.Item{Type: revs.ItemTypeMovie, Title: m.Title}
+func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) ratingset.Item {
+	t := ratingset.Item{Type: ratingset.ItemTypeMovie, Title: m.Title}
 	if m.Year != nil {
 		y := int(*m.Year)
 		t.Year = &y
@@ -92,7 +92,7 @@ func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) revs.Item {
 
 	// Oldest first, undated first; AllViewings already orders by date then id.
 	for _, v := range viewings {
-		e := revs.Entry{Date: v.ViewedOn}
+		e := ratingset.Entry{Date: v.ViewedOn}
 		if v.Rating != nil {
 			n := int(*v.Rating)
 			e.Rating = &n
@@ -164,7 +164,7 @@ func (c *Collection) commitExport(ctx context.Context, key ed25519.PrivateKey, u
 type parsedDoc struct {
 	UserID string // empty for an unsigned file without an author line
 	Signed bool
-	Items  []revs.Item
+	Items  []ratingset.Item
 	// Invalid counts item lines skipped as invalid.
 	Invalid int
 }
@@ -188,7 +188,7 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 	lines := bytes.Split(data, []byte("\n"))
 
 	if gjson.GetBytes(first, "sjsonl").Exists() {
-		user, _, err := revs.ParseRatingset(append(data, '\n'))
+		user, _, err := ratingset.ParseRatingset(append(data, '\n'))
 		if err != nil {
 			return nil, fmt.Errorf("verifying signed document: %w", err)
 		}
@@ -317,11 +317,11 @@ func (s ImportStats) String() string {
 
 // mergeItems adds movie items and their entries to the local collection
 // without removing or overwriting anything. Items are expected to be
-// valid (see revs.Item.Validate), with ratings in half stars. An item
+// valid (see ratingset.Item.Validate), with ratings in half stars. An item
 // matches an existing movie as findMovie describes; missing ids are
 // filled in on a match. An entry is added unless the movie already has
 // a viewing with the same date, rating, and text.
-func (c *Collection) mergeItems(ctx context.Context, items []revs.Item) (ImportStats, error) {
+func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (ImportStats, error) {
 	var stats ImportStats
 
 	tx, err := c.db.BeginTx(ctx, nil)
@@ -332,7 +332,7 @@ func (c *Collection) mergeItems(ctx context.Context, items []revs.Item) (ImportS
 	q := c.q.WithTx(tx)
 
 	for _, t := range items {
-		if !t.IsType(revs.ItemTypeMovie) {
+		if !t.IsType(ratingset.ItemTypeMovie) {
 			stats.SkippedNonFilm++
 			continue
 		}

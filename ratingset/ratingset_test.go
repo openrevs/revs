@@ -1,4 +1,4 @@
-package revs
+package ratingset
 
 import (
 	"bytes"

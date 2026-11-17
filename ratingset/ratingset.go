@@ -1,4 +1,9 @@
-package revs
+// Package ratingset is the ratingset document format: the author and
+// item lines of a revs ratings document, how they are parsed, validated
+// and encoded, and the user identities that sign them. It is shared by
+// both sides of revs: the server checks uploads with it, and clients
+// (see the collection package) build documents with it.
+package ratingset
 
 import (
 	"bytes"

@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"context"
@@ -180,25 +180,19 @@ func (s *Server) ingestUpstream(ctx context.Context, up *upstream, ids []string)
 	return accepted, nil
 }
 
-// startPuller pulls from every upstream right away and then on a fixed
-// interval.
-func (s *Server) startPuller(ctx context.Context, interval time.Duration) {
-	if len(s.upstreams) == 0 {
-		return
-	}
+// runPuller pulls from every upstream right away and then every
+// pullInterval, until ctx is done.
+func (s *Server) runPuller(ctx context.Context) {
+	ticker := time.NewTicker(s.pullInterval)
+	defer ticker.Stop()
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+	for {
+		s.Pull(ctx) // failures are logged per upstream
 
-		for {
-			s.Pull(ctx) // failures are logged per upstream
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
+	}
 }

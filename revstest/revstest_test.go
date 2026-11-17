@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection"
 	"github.com/openrevs/revs/revstest"
+	"github.com/openrevs/revs/server"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,7 +144,7 @@ func TestServerRestart(t *testing.T) {
 	ctx := context.Background()
 	network := revstest.NewNetwork(t)
 
-	s := network.NewServer(revstest.WithName("origin.test"), revstest.WithServerOptions(revs.ServerOptions{SnapshotEvery: 2}))
+	s := network.NewServer(revstest.WithName("origin.test"), revstest.WithServerOptions(server.Options{SnapshotEvery: 2}))
 	require.Equal(t, "http://origin.test", s.URL)
 
 	key := revstest.NewKey(t)

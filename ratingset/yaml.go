@@ -1,21 +1,24 @@
-package revs
+package ratingset
 
 import (
 	"bytes"
 	"crypto/ed25519"
-	"fmt"
 
 	"github.com/go-playground/validator/v10"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"gopkg.in/yaml.v2"
 )
 
+// Example is a ratingset written as YAML (see data.yaml), a convenient
+// hand-edited source for a document.
 type Example struct {
 	Author Author
 	Items  []Item
 }
 
-func ConvertYAML(data, privateKey []byte) (*Example, error) {
+// ConvertYAML parses and validates a YAML ratingset and returns it as a
+// JSONL document signed with privateKey.
+func ConvertYAML(data []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
 	var conf Example
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		return nil, err
@@ -44,12 +47,6 @@ func ConvertYAML(data, privateKey []byte) (*Example, error) {
 		buf.WriteByte('\n')
 	}
 
-	signed, _, err := jsonlines.Sign(buf.Bytes(), ed25519.PrivateKey(privateKey))
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Print(string(signed))
-
-	return &conf, nil
+	signed, _, err := jsonlines.Sign(buf.Bytes(), privateKey)
+	return signed, err
 }

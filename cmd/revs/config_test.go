@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/server"
 )
 
 // parseWith parses args against a parser whose config search path is a
@@ -32,20 +32,20 @@ func parseWith(t *testing.T, configYAML string, args ...string) *cli {
 
 func TestConfigDefaults(t *testing.T) {
 	c := parseWith(t, "", "server")
-	if c.Server.Listen != revs.DefaultServerListen {
-		t.Errorf("listen = %q, want %q", c.Server.Listen, revs.DefaultServerListen)
+	if c.Server.Listen != server.DefaultListen {
+		t.Errorf("listen = %q, want %q", c.Server.Listen, server.DefaultListen)
 	}
-	if c.Server.CutInterval != revs.DefaultCutInterval {
-		t.Errorf("cut interval = %v, want %v", c.Server.CutInterval, revs.DefaultCutInterval)
+	if c.Server.CutInterval != server.DefaultCutInterval {
+		t.Errorf("cut interval = %v, want %v", c.Server.CutInterval, server.DefaultCutInterval)
 	}
-	if c.Server.SnapshotEvery != revs.DefaultSnapshotEvery {
-		t.Errorf("snapshot every = %d, want %d", c.Server.SnapshotEvery, revs.DefaultSnapshotEvery)
+	if c.Server.SnapshotEvery != server.DefaultSnapshotEvery {
+		t.Errorf("snapshot every = %d, want %d", c.Server.SnapshotEvery, server.DefaultSnapshotEvery)
 	}
-	if c.Server.PartSize != revs.DefaultPartSize {
-		t.Errorf("part size = %d, want %d", c.Server.PartSize, revs.DefaultPartSize)
+	if c.Server.PartSize != server.DefaultPartSize {
+		t.Errorf("part size = %d, want %d", c.Server.PartSize, server.DefaultPartSize)
 	}
-	if !slices.Equal(c.Server.CompactEvery, revs.DefaultCompactEvery) {
-		t.Errorf("compact every = %v, want %v", c.Server.CompactEvery, revs.DefaultCompactEvery)
+	if !slices.Equal(c.Server.CompactEvery, server.DefaultCompactEvery) {
+		t.Errorf("compact every = %v, want %v", c.Server.CompactEvery, server.DefaultCompactEvery)
 	}
 }
 
@@ -76,7 +76,7 @@ server:
 		t.Errorf("compact every = %v, want [10 100]", c.Server.CompactEvery)
 	}
 	// Unset keys keep their defaults.
-	if c.Server.PartSize != revs.DefaultPartSize {
+	if c.Server.PartSize != server.DefaultPartSize {
 		t.Errorf("part size = %d, want default", c.Server.PartSize)
 	}
 }
@@ -108,10 +108,13 @@ ui:
 	if c.UI.Listen != "127.0.0.1:9998" {
 		t.Errorf("ui listen = %q, want config value", c.UI.Listen)
 	}
-	// The server section must not leak into the client command.
-	c = parseWith(t, cfg, "client")
-	if c.Client.Listen != revs.DefaultClientListen {
-		t.Errorf("client listen = %q, want default", c.Client.Listen)
+	// The ui section must not leak into the server command.
+	c = parseWith(t, cfg, "server")
+	if c.Server.DataDir == uiDir {
+		t.Errorf("server data dir = %q, took the ui section's value", c.Server.DataDir)
+	}
+	if c.Server.Listen != ":9999" {
+		t.Errorf("server listen = %q, want config value", c.Server.Listen)
 	}
 }
 
@@ -201,7 +204,7 @@ server:
 	}
 
 	c = parseWith(t, "", "server")
-	if len(c.Server.Pull) != 0 || c.Server.PullInterval != revs.DefaultPullInterval {
-		t.Errorf("pull = %q every %v, want none every %v", c.Server.Pull, c.Server.PullInterval, revs.DefaultPullInterval)
+	if len(c.Server.Pull) != 0 || c.Server.PullInterval != server.DefaultPullInterval {
+		t.Errorf("pull = %q every %v, want none every %v", c.Server.Pull, c.Server.PullInterval, server.DefaultPullInterval)
 	}
 }

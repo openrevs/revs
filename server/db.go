@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"database/sql"

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/ratingset"
 	"github.com/openrevs/revs/revstest"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/require"
@@ -270,7 +270,7 @@ func TestExportImport(t *testing.T) {
 	doc := export()
 	info, err := jsonlines.Verify(doc)
 	require.NoError(t, err)
-	user, _, err := revs.ParseRatingset(doc)
+	user, _, err := ratingset.ParseRatingset(doc)
 	require.NoError(t, err)
 	require.Equal(t, u.app.c.UserID(ctx), user.ID)
 	require.Equal(t, 1, user.Revision)
@@ -280,7 +280,7 @@ func TestExportImport(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, info.Hash, again.Hash)
 	u.post("/movies", url.Values{"title": {"Heat"}, "year": {"1995"}})
-	user, _, err = revs.ParseRatingset(export())
+	user, _, err = ratingset.ParseRatingset(export())
 	require.NoError(t, err)
 	require.Equal(t, 2, user.Revision)
 
@@ -493,7 +493,7 @@ func TestRevisionsSharedAcrossServers(t *testing.T) {
 		defer resp.Body.Close()
 		doc, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
-		user, _, err := revs.ParseRatingset(doc)
+		user, _, err := ratingset.ParseRatingset(doc)
 		require.NoError(t, err)
 		return user.Revision
 	}

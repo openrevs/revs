@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/ratingset"
 )
 
 // CSV import columns. Matched case-insensitively; other columns are
@@ -30,7 +30,7 @@ var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, cs
 // naming the columns; only title is required. Each row is one movie,
 // and a row with a rating or view date also records a viewing of it.
 // Every row is validated before anything is returned.
-func parseCSV(data []byte) ([]revs.Item, error) {
+func parseCSV(data []byte) ([]ratingset.Item, error) {
 	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")) // spreadsheet BOM
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, errors.New("file is empty")
@@ -61,7 +61,7 @@ func parseCSV(data []byte) ([]revs.Item, error) {
 		return nil, fmt.Errorf("header must include a %q column (supported: %s)", csvTitle, strings.Join(csvColumns, ", "))
 	}
 
-	var titles []revs.Item
+	var titles []ratingset.Item
 	for {
 		rec, err := r.Read()
 		if err == io.EOF {
@@ -90,7 +90,7 @@ func parseCSV(data []byte) ([]revs.Item, error) {
 			return nil, fmt.Errorf("line %d: %s", line, strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 
-		t := revs.Item{Type: revs.ItemTypeMovie, Title: in.Title}
+		t := ratingset.Item{Type: ratingset.ItemTypeMovie, Title: in.Title}
 		if in.Year != nil {
 			y := int(*in.Year)
 			t.Year = &y
@@ -106,12 +106,12 @@ func parseCSV(data []byte) ([]revs.Item, error) {
 			t.Refs = refs
 		}
 		if vin.Date != nil || vin.Rating != nil {
-			e := revs.Entry{Date: vin.Date}
+			e := ratingset.Entry{Date: vin.Date}
 			if vin.Rating != nil {
 				n := int(*vin.Rating)
 				e.Rating = &n
 			}
-			t.Entries = []revs.Entry{e}
+			t.Entries = []ratingset.Entry{e}
 		}
 		titles = append(titles, t)
 	}

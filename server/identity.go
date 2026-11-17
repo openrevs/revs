@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"crypto/ed25519"
@@ -12,11 +12,11 @@ import (
 
 const serverKeyFile = "server.key"
 
-// loadOrCreateServerKey returns the server's ed25519 identity, generating
-// it on first boot. The key file holds the base64-encoded private key in the
+// LoadOrCreateKey returns the server's ed25519 identity from dataDir,
+// generating it on first boot. The key file holds the base64-encoded private key in the
 // data directory; the key is the server's identity (the TOFU pin and
 // manifest signer), so backing up the data directory backs it up too.
-func loadOrCreateServerKey(dataDir string) (ed25519.PrivateKey, error) {
+func LoadOrCreateKey(dataDir string) (ed25519.PrivateKey, error) {
 	path := filepath.Join(dataDir, serverKeyFile)
 
 	data, err := os.ReadFile(path)

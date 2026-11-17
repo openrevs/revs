@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/server"
 )
 
 // Server is a revs server running on a Network, with all its state in
@@ -21,15 +21,15 @@ type Server struct {
 	// Key is the server's private key; clients pin its public half.
 	Key ed25519.PrivateKey
 	// DB is the server's in-memory database.
-	DB *revs.DB
+	DB *server.DB
 	// Publications holds what the server has published.
-	Publications *revs.MemPublications
+	Publications *server.MemPublications
 
 	net  *Network
-	opts revs.ServerOptions
+	opts server.Options
 
 	mu  sync.Mutex
-	srv *revs.Server
+	srv *server.Server
 }
 
 // ServerOption configures a server created by Network.NewServer.
@@ -38,7 +38,7 @@ type ServerOption func(*serverConfig)
 type serverConfig struct {
 	name string
 	key  ed25519.PrivateKey
-	opts revs.ServerOptions
+	opts server.Options
 }
 
 // WithName sets the server's hostname (default serverN.test).
@@ -52,7 +52,7 @@ func WithServerKey(key ed25519.PrivateKey) ServerOption {
 }
 
 // WithServerOptions overrides server tunables, e.g. SnapshotEvery.
-func WithServerOptions(opts revs.ServerOptions) ServerOption {
+func WithServerOptions(opts server.Options) ServerOption {
 	return func(c *serverConfig) { c.opts = opts }
 }
 
@@ -75,7 +75,7 @@ func (n *Network) NewServer(opts ...ServerOption) *Server {
 		cfg.key = NewKey(n.t)
 	}
 
-	db, err := revs.OpenMemoryDB()
+	db, err := server.OpenMemoryDB()
 	if err != nil {
 		n.t.Fatalf("revstest: opening server database: %v", err)
 	}
@@ -85,7 +85,7 @@ func (n *Network) NewServer(opts ...ServerOption) *Server {
 		Host:         cfg.name,
 		Key:          cfg.key,
 		DB:           db,
-		Publications: &revs.MemPublications{},
+		Publications: &server.MemPublications{},
 		net:          n,
 		opts:         cfg.opts,
 	}
@@ -95,16 +95,16 @@ func (n *Network) NewServer(opts ...ServerOption) *Server {
 	return s
 }
 
-// start builds a fresh revs.Server over s's state.
+// start builds a fresh server.Server over s's state.
 func (s *Server) start() {
 	s.net.t.Helper()
 
-	srv, err := revs.NewServerFromConfig(revs.ServerConfig{
-		DB:            s.DB,
-		Key:           s.Key,
-		Publications:  s.Publications,
-		HTTPClient:    s.net.httpClient,
-		ServerOptions: s.opts,
+	srv, err := server.New(server.Config{
+		DB:           s.DB,
+		Key:          s.Key,
+		Publications: s.Publications,
+		HTTPClient:   s.net.httpClient,
+		Options:      s.opts,
 	})
 	if err != nil {
 		s.net.t.Fatalf("revstest: starting %s: %v", s.Host, err)
@@ -119,8 +119,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	s.Server().Handler().ServeHTTP(w, r)
 }
 
-// Server returns the running revs.Server.
-func (s *Server) Server() *revs.Server {
+// Server returns the running server.Server.
+func (s *Server) Server() *server.Server {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.srv
@@ -141,7 +141,7 @@ func (s *Server) Cut() int {
 	if err != nil {
 		s.net.t.Fatalf("revstest: cutting %s: %v", s.Host, err)
 	}
-	return epochs[revs.ChannelMain]
+	return epochs[server.ChannelMain]
 }
 
 // Down makes the server unreachable until Up.

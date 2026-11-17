@@ -1,4 +1,4 @@
-package revs
+package server
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/openrevs/revs/domain"
+	"github.com/openrevs/revs/ratingset"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestServerPull(t *testing.T) {
 	down, downTS := newTestServer(t)
 	require.NoError(t, down.AddUpstream(upTS.URL+"/"))
 
-	alice, bob := NewUser(), NewUser()
+	alice, bob := ratingset.NewUser(), ratingset.NewUser()
 
 	// Nothing published upstream yet: pulling is a no-op.
 	require.NoError(t, down.Pull(ctx))
@@ -97,11 +98,11 @@ func TestServerPullReconcilesOnStart(t *testing.T) {
 	ctx := context.Background()
 	up, upTS := newTestServer(t)
 	dir := t.TempDir()
-	down, err := NewServer(dir)
+	down, err := Open(dir, Options{})
 	require.NoError(t, err)
 	require.NoError(t, down.AddUpstream(upTS.URL))
 
-	alice := NewUser()
+	alice := ratingset.NewUser()
 	require.Equal(t, http.StatusOK, upload(t, upTS, signedDoc(t, alice, 1, "Alien")).StatusCode)
 	_, err = up.Cut(ctx)
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestServerPullReconcilesOnStart(t *testing.T) {
 	require.NoError(t, down.Pull(ctx))
 	require.Empty(t, latestByUser(t, down))
 
-	restarted, err := NewServer(dir)
+	restarted, err := Open(dir, Options{})
 	require.NoError(t, err)
 	require.NoError(t, restarted.AddUpstream(upTS.URL))
 	require.NoError(t, restarted.Pull(ctx))

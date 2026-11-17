@@ -1,11 +1,21 @@
-package revs
+// Package server is the revs publishing server: it accepts signed
+// ratingset uploads, pulls documents from upstream servers, and
+// periodically publishes everything as signed, static epochs.
+//
+// An application embeds a server by building one (Open for a data
+// directory, New for explicit dependencies), mounting Handler on its
+// own HTTP server, and calling Run for the background epoch cutter and
+// upstream puller. ListenAndServe does all of that, as "revs server"
+// does.
+package server
 
 import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -15,7 +25,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/internal/httplog"
-	"log/slog"
 )
 
 const (
@@ -26,7 +35,8 @@ const (
 	// CDN cacheable-object caps and a sane unit for parallel fetch/retry.
 	DefaultPartSize = 256 << 20
 
-	DefaultServerListen = ":1323"
+	// DefaultListen is the address ListenAndServe uses when given none.
+	DefaultListen = ":1323"
 )
 
 // DefaultCompactEvery is the default set of aligned compaction
@@ -63,10 +73,8 @@ type Server struct {
 	logRequests bool
 }
 
-// ServerOptions overrides server tunables. Zero values keep the
-// defaults.
-type ServerOptions struct {
-	Listen        string
+// Options overrides server tunables. Zero values keep the defaults.
+type Options struct {
 	CutInterval   time.Duration
 	SnapshotEvery int
 	PartSize      int
@@ -79,16 +87,16 @@ type ServerOptions struct {
 	Pull         []string
 	PullInterval time.Duration
 
-	// LogRequests logs every HTTP request served (method, path, status,
-	// size, duration); never bodies.
+	// LogRequests makes Handler log every HTTP request served (method,
+	// path, status, size, duration); never bodies.
 	LogRequests bool
 }
 
-// ServerConfig holds everything a Server depends on. NewServer builds
-// one from a data directory; tests build their own, typically with an
-// in-memory database (OpenMemoryDB) and MemPublications, to run any
-// number of servers in one process.
-type ServerConfig struct {
+// Config holds everything a Server depends on. Open builds one from a
+// data directory; tests and embedding applications can build their
+// own, e.g. with an in-memory database (OpenMemoryDB) and
+// MemPublications, to run any number of servers in one process.
+type Config struct {
 	// DB is the server's migrated database (GetDB or OpenMemoryDB).
 	DB *DB
 	// Key is the server's identity: it signs manifests, and clients
@@ -100,37 +108,32 @@ type ServerConfig struct {
 	// to reach in-process servers (see the revstest package).
 	HTTPClient *http.Client
 
-	ServerOptions
+	Options
 }
 
-// NewServer opens (creating if needed) a server whose database, key,
-// and publications live in dataDir.
-func NewServer(dataDir string) (*Server, error) {
-	return NewServerWithOptions(dataDir, ServerOptions{})
-}
-
-// NewServerWithOptions is NewServer with tunables overridden.
-func NewServerWithOptions(dataDir string, opts ServerOptions) (*Server, error) {
+// Open opens (creating if needed) a server whose database, key, and
+// publications live in dataDir: revs.db, server.key, and public/v1.
+func Open(dataDir string, opts Options) (*Server, error) {
 	db, err := GetDB(dataDir)
 	if err != nil {
 		return nil, err
 	}
 
-	key, err := loadOrCreateServerKey(dataDir)
+	key, err := LoadOrCreateKey(dataDir)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewServerFromConfig(ServerConfig{
-		DB:            db,
-		Key:           key,
-		Publications:  DirPublications{Root: filepath.Join(dataDir, "public", "v1")},
-		ServerOptions: opts,
+	return New(Config{
+		DB:           db,
+		Key:          key,
+		Publications: DirPublications{Root: filepath.Join(dataDir, "public", "v1")},
+		Options:      opts,
 	})
 }
 
-// NewServerFromConfig builds a server from explicit dependencies.
-func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
+// New builds a server from explicit dependencies.
+func New(cfg Config) (*Server, error) {
 	if cfg.DB == nil || cfg.Key == nil || cfg.Publications == nil {
 		return nil, errors.New("server config requires a DB, key, and publications")
 	}
@@ -190,22 +193,73 @@ func NewServerFromConfig(cfg ServerConfig) (*Server, error) {
 	return s, nil
 }
 
-func Start2(dataDir string, opts ServerOptions) {
-	server, err := NewServerWithOptions(dataDir, opts)
+// Run runs the server's background work until ctx is done: an epoch
+// cut every CutInterval, and a pull from every upstream right away and
+// then every PullInterval. Applications that serve Handler themselves
+// call Run alongside it; tests that want full control call Cut and Pull
+// directly instead.
+func (s *Server) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.runCutter(ctx)
+	}()
+	if len(s.upstreams) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runPuller(ctx)
+		}()
+	}
+	wg.Wait()
+}
+
+// ListenAndServe serves Handler on addr (DefaultListen if empty) and
+// runs the background work (see Run) until ctx is done, then shuts the
+// HTTP server down gracefully.
+func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	if addr == "" {
+		addr = DefaultListen
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	slog.Info("server listening", "addr", ln.Addr().String())
+	return serve(ctx, ln, s.Handler(), s.Run)
+}
 
-	listen := opts.Listen
-	if listen == "" {
-		listen = DefaultServerListen
+// serve serves h on ln, with background running alongside, until ctx
+// is done or the HTTP server fails.
+func serve(ctx context.Context, ln net.Listener, h http.Handler, background func(context.Context)) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		background(ctx)
+	}()
+
+	hs := &http.Server{Handler: h}
+	errc := make(chan error, 1)
+	go func() { errc <- hs.Serve(ln) }()
+
+	var err error
+	select {
+	case err = <-errc:
+	case <-ctx.Done():
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		err = hs.Shutdown(shutdownCtx)
+		stop()
 	}
-
-	server.startCutter(context.Background())
-	server.startPuller(context.Background(), server.pullInterval)
-
-	log.Printf("server listening on %s", listen)
-	log.Fatal(http.ListenAndServe(listen, server.Handler()))
+	cancel()
+	<-done
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	return err
 }
 
 // PublicKey returns the server's public key, which clients pin.
@@ -248,24 +302,23 @@ func (s *Server) routes(r chi.Router) {
 	r.Handle("/v1/*", http.StripPrefix("/v1/", fs))
 }
 
-// startCutter runs epoch cuts on a fixed interval. A tick with nothing
-// accepted since the last cut does nothing.
-func (s *Server) startCutter(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(s.cutInterval)
-		defer ticker.Stop()
+// runCutter runs epoch cuts on a fixed interval until ctx is done. A
+// tick with nothing accepted since the last cut does nothing. A cut in
+// progress when ctx is done runs to completion.
+func (s *Server) runCutter(ctx context.Context) {
+	ticker := time.NewTicker(s.cutInterval)
+	defer ticker.Stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if _, err := s.Cut(ctx); err != nil {
-					slog.Error("epoch cut failed", "error", err)
-				}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.Cut(context.WithoutCancel(ctx)); err != nil {
+				slog.Error("epoch cut failed", "error", err)
 			}
 		}
-	}()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

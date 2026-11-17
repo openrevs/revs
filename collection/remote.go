@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openrevs/revs"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection/localdb"
+	"github.com/openrevs/revs/ratingset"
 	"github.com/tidwall/gjson"
 )
 
@@ -110,7 +110,7 @@ func (c *Collection) reindex(ctx context.Context, r *remote, userIDs []string, a
 // don't parse or are invalid are skipped rather than failing the whole
 // index. Items of types other than movie are skipped too.
 func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc *client.Document) error {
-	var items []revs.Item
+	var items []ratingset.Item
 	lines := bytes.Split(doc.Data, []byte("\n"))
 	lines = lines[min(1, len(lines)):] // skip the control line
 
@@ -129,7 +129,7 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 				continue
 			}
 			it, ok := readItem(line, scale)
-			if !ok || !it.IsType(revs.ItemTypeMovie) {
+			if !ok || !it.IsType(ratingset.ItemTypeMovie) {
 				continue
 			}
 			items = append(items, it)

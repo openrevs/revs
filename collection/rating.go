@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openrevs/revs"
+	"github.com/openrevs/revs/ratingset"
 )
 
 // legacyMin and legacyMax are the scale assumed for an unsigned import
@@ -54,7 +54,7 @@ type ratingScale struct{ min, max int }
 // scaleOf reads the scale from an author line. An author line without a
 // valid scale makes the document invalid.
 func scaleOf(authorLine []byte) (ratingScale, error) {
-	a, err := revs.ParseAuthorLine(authorLine)
+	a, err := ratingset.ParseAuthorLine(authorLine)
 	if err != nil {
 		return ratingScale{}, err
 	}
@@ -75,10 +75,10 @@ func (s ratingScale) scale(r *int) *int64 {
 // readItem parses and validates an item line against the document's
 // scale. ok is false for a line that isn't a valid item, which
 // consumers skip.
-func readItem(line []byte, s ratingScale) (it revs.Item, ok bool) {
-	it, err := revs.ParseItemLine(line)
+func readItem(line []byte, s ratingScale) (it ratingset.Item, ok bool) {
+	it, err := ratingset.ParseItemLine(line)
 	if err != nil || it.Validate(s.min, s.max) != nil {
-		return revs.Item{}, false
+		return ratingset.Item{}, false
 	}
 	return it, true
 }
