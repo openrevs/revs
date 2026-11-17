@@ -12,11 +12,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/ratingset"
-	"github.com/openrevs/revs/util"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
@@ -148,7 +148,7 @@ func (s *Server) acceptDocument(ctx context.Context, body []byte, latest *domain
 		Rev:          rev,
 		Hash:         info.Hash,
 		Size:         len(canonical),
-		ReceivedTime: util.Now(),
+		ReceivedTime: now(),
 		Source:       source,
 	}); err != nil {
 		// A concurrent upload of the same rev loses the (userid, rev)
@@ -220,4 +220,10 @@ func patchControl(body []byte) (uploadPatch, bool, error) {
 	}
 
 	return uploadPatch{Base: ctl.Base, userID: keys.UserID(ed25519.PublicKey(key))}, true, nil
+}
+
+// now is the current time in UTC, to the second: the precision stored
+// and published.
+func now() time.Time {
+	return time.Now().UTC().Truncate(time.Second)
 }

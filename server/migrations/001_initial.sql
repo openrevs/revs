@@ -1,8 +1,10 @@
 -- +goose Up
 
 -- The server's accepted-document ledger. Document blobs live in the
--- line store; this table holds metadata only. (004 adds source, which
--- records whether the document was uploaded directly or pulled.)
+-- line store (see client/sqlitestore); this table holds metadata only.
+-- source is where the document came from: '' for a direct upload, else
+-- the URL of the upstream server it was pulled from, so an operator can
+-- trace a cluster of bad documents to the server that supplied them.
 CREATE TABLE documents
 (
     userid text NOT NULL
@@ -10,6 +12,7 @@ CREATE TABLE documents
     , hash text NOT NULL
     , size integer NOT NULL
     , received_time datetime NOT NULL
+    , source text NOT NULL DEFAULT ''
     , PRIMARY KEY (userid, rev)
 );
 
@@ -47,13 +50,8 @@ CREATE TABLE artifacts
     , PRIMARY KEY (channel, kind, start_epoch, end_epoch)
 );
 
-DROP TABLE uploads;
-DROP TABLE reviews;
-DROP TABLE snapshots;
-DROP TABLE ratingsets;
-
 -- +goose Down
-DROP TABLE documents;
-DROP TABLE channel_epochs;
-DROP TABLE channel_changes;
 DROP TABLE artifacts;
+DROP TABLE channel_changes;
+DROP TABLE channel_epochs;
+DROP TABLE documents;

@@ -17,7 +17,6 @@ import (
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
-	"github.com/openrevs/revs/util"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
@@ -218,7 +217,7 @@ func (s *Server) cutChannel(ctx context.Context, ch channel) (int, error) {
 	}
 
 	epoch := cur + 1
-	created := util.Now().UTC().Truncate(time.Second)
+	created := now()
 	dir := ch.name
 
 	// Newest-first, so a mostly synced consumer's skippable entries
@@ -433,7 +432,7 @@ func (s *Server) writeManifest(name string, meta manifestMeta, created time.Time
 // writeIndex regenerates /v1/index.json from the database.
 func (s *Server) writeIndex(ctx context.Context) error {
 	idx := publicationIndex{
-		Created:   util.Now().UTC().Format(time.RFC3339),
+		Created:   now().Format(time.RFC3339),
 		ServerID:  s.serverID(),
 		ServerKey: keys.EncodePublic(s.key.Public().(ed25519.PublicKey)),
 		Channels:  map[string]*channelIndex{},

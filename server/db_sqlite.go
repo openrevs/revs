@@ -13,7 +13,7 @@ import (
 const dbfilename = "revs.db"
 
 var (
-	//go:embed migrations2/*.sql
+	//go:embed migrations/*.sql
 	migrations embed.FS
 	mu         sync.Mutex
 )
@@ -63,7 +63,7 @@ func openDB(dsn string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 
-	if err := sqlitedb.Migrate(db, migrations, "migrations2"); err != nil {
+	if err := sqlitedb.Migrate(db, migrations, "migrations"); err != nil {
 		db.Close()
 		return nil, err
 	}
