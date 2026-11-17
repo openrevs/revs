@@ -22,13 +22,16 @@ const (
 	csvIMDB     = "imdb_id"
 	csvIMDBNoTT = "imdb_id_no_tt" // "0110912": some exports drop the "tt"
 	csvTMDB     = "tmdb_id"
+	csvReview   = "review"
 )
 
-var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvIMDBNoTT, csvTMDB}
+var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvIMDBNoTT, csvTMDB, csvReview}
 
 // parseCSV reads a CSV file of movies. The first line is a header
 // naming the columns; only title is required. Each row is one movie,
-// and a row with a rating or view date also records a viewing of it.
+// and a row with a rating, view date, or review also records a viewing
+// of it. Fields are standard CSV, so a quoted review may contain
+// commas, quotes ("") and line breaks.
 // Every row is validated before anything is returned.
 func parseCSV(data []byte) ([]ratingset.Item, error) {
 	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")) // spreadsheet BOM
@@ -84,7 +87,7 @@ func parseCSV(data []byte) ([]ratingset.Item, error) {
 		if imdb != nil {
 			in.IMDB = imdb
 		}
-		vf := ViewingFields{Date: get(csvViewDate), Rating: get(csvRating)}
+		vf := ViewingFields{Date: get(csvViewDate), Rating: get(csvRating), Review: get(csvReview)}
 		vin, verr := vf.Parse()
 		if err := errors.Join(merr, ierr, verr); err != nil {
 			return nil, fmt.Errorf("line %d: %s", line, strings.ReplaceAll(err.Error(), "\n", "; "))
@@ -105,11 +108,14 @@ func parseCSV(data []byte) ([]ratingset.Item, error) {
 		if len(refs) > 0 {
 			t.Refs = refs
 		}
-		if vin.Date != nil || vin.Rating != nil {
+		if vin.Date != nil || vin.Rating != nil || vin.Review != "" {
 			e := ratingset.Entry{Date: vin.Date}
 			if vin.Rating != nil {
 				n := int(*vin.Rating)
 				e.Rating = &n
+			}
+			if vin.Review != "" {
+				e.Review = &vin.Review
 			}
 			t.Entries = []ratingset.Entry{e}
 		}

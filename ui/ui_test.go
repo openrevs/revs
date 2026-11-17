@@ -393,6 +393,20 @@ func TestImportCSV(t *testing.T) {
 	_, msg = u.uploadTo("/import/csv", []byte("title\nAlien\n"))
 	require.Contains(t, msg, "Imported 1 new movies")
 
+	// review is free text: quoted fields may hold commas, doubled
+	// quotes, and line breaks (LF or CRLF), and a review alone adds a
+	// viewing.
+	file = "title,review,rating\r\n" +
+		"Brazil,\"Odd, \"\"funny\"\",\r\nand long.\n\nSee it.\",4\r\n" +
+		"Brazil,  Second look  ,\r\n"
+	_, msg = u.uploadTo("/import/csv", []byte(file))
+	require.Contains(t, msg, "Imported 1 new movies (1 already present) and 2 new viewings (0 already present)")
+	vs, err = u.app.c.Viewings(ctx, 6)
+	require.NoError(t, err)
+	require.Len(t, vs, 2)
+	reviews := []string{vs[0].Review, vs[1].Review}
+	require.ElementsMatch(t, []string{"Odd, \"funny\",\nand long.\n\nSee it.", "Second look"}, reviews)
+
 	// Bad files are rejected whole.
 	for file, want := range map[string]string{
 		"year,rating\n1994,5\n":                                 `must include a &#34;title&#34; column`,
@@ -410,7 +424,7 @@ func TestImportCSV(t *testing.T) {
 	}
 	counts, err := u.app.c.Counts(ctx)
 	require.NoError(t, err)
-	require.EqualValues(t, 5, counts.Movies, "a rejected file imports nothing")
+	require.EqualValues(t, 6, counts.Movies, "a rejected file imports nothing")
 }
 
 func (u *testUI) upload(data []byte) (string, string) {
