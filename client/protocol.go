@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/openrevs/revs/keys"
-	jsonlines "github.com/openrevs/sjsonl-go"
+	"github.com/openrevs/revs/ratingset"
 )
 
 // The publication format: see specs/publishing-v2.md in the website
@@ -211,67 +211,22 @@ type verifiedDoc struct {
 	data   []byte // canonical encoding
 }
 
-// verifyDoc checks a full signed document: valid author signature, and
-// an id line whose id matches the signing key. It returns the canonical
-// encoding along with the asserted revision.
+// verifyDoc checks a full signed document's identity binding (see
+// ratingset.Verify) and returns its canonical encoding along with the
+// asserted revision.
 func verifyDoc(data []byte) (*verifiedDoc, error) {
-	doc, err := jsonlines.Parse(data)
+	doc, id, err := ratingset.Verify(data)
 	if err != nil {
 		return nil, err
 	}
-	info := doc.Info()
-	canonical := doc.JSON()
-
-	id, rev, err := docIdentity(canonical)
-	if err != nil {
-		return nil, err
-	}
-	if signer := userIDFromKey(info.SignerKey); signer != id {
-		return nil, fmt.Errorf("document for user %s is signed by %s", id, signer)
-	}
-
-	return &verifiedDoc{userID: id, rev: rev, hash: info.Hash, data: canonical}, nil
+	return &verifiedDoc{userID: id.ID, rev: id.Revision, hash: doc.Info().Hash, data: doc.JSON()}, nil
 }
 
-// docIdentity returns the user id and asserted revision from a
-// document's id line, without verifying the signature.
+// docIdentity returns the user id and asserted revision of a stored
+// (already verified) document, without verifying the signature.
 func docIdentity(doc []byte) (string, int, error) {
-	lines := splitLines(doc)
-	if len(lines) == 0 {
-		return "", 0, errors.New("empty document")
-	}
-
-	found := false
-	var id string
-	var rev int
-	for _, line := range lines[1:] { // line 0 is the sjsonl control line
-		var probe struct {
-			ID       *string `json:"id"`
-			Revision *int    `json:"revision"`
-		}
-		if err := json.Unmarshal(line, &probe); err != nil {
-			return "", 0, err
-		}
-		if probe.ID == nil {
-			continue
-		}
-		if found {
-			return "", 0, errors.New("document has multiple id lines")
-		}
-		found = true
-		id = *probe.ID
-		if probe.Revision != nil {
-			rev = *probe.Revision
-		}
-	}
-	if !found {
-		return "", 0, errors.New("document has no id line")
-	}
-	if rev < 1 {
-		return "", 0, fmt.Errorf("document for user %s has no valid revision", id)
-	}
-
-	return id, rev, nil
+	id, err := ratingset.ReadIdentity(doc)
+	return id.ID, id.Revision, err
 }
 
 // UserID derives a user's id from their public key, matching the

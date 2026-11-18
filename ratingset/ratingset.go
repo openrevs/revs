@@ -214,38 +214,92 @@ func EncodeLine(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// ParseRatingset verifies a signed sjsonl ratingset and returns its
-// author line and the parsed document. The document must have exactly
-// one author line, with a valid rating scale and an ID matching the
-// signing key. Item lines are not checked.
-func ParseRatingset(data []byte) (*Author, *jsonlines.JSONL, error) {
+// Identity is who a signed document claims to be and which revision
+// it asserts: its author line's id and revision.
+type Identity struct {
+	ID       string
+	Revision int
+}
+
+// Verify checks the identity binding every revs document carries: a
+// valid sjsonl signature, exactly one author line (the one line with an
+// "id" member), a revision of at least 1, and an id derived from the
+// signing key. It returns the parsed document and its identity. It
+// doesn't check the rating scale or item lines (see ParseRatingset), so
+// format-agnostic consumers such as the sync client can use it alone.
+func Verify(data []byte) (*jsonlines.JSONL, Identity, error) {
+	doc, id, _, err := verify(data)
+	return doc, id, err
+}
+
+// verify is Verify, also returning the author line.
+func verify(data []byte) (*jsonlines.JSONL, Identity, []byte, error) {
 	doc, err := jsonlines.Parse(data)
 	if err != nil {
-		return nil, nil, err
+		return nil, Identity{}, nil, err
 	}
+	id, line, err := readIdentity(doc.JSON())
+	if err != nil {
+		return nil, Identity{}, nil, err
+	}
+	if signer := userID(doc.Info().SignerKey); signer != id.ID {
+		return nil, Identity{}, nil, fmt.Errorf("author id %s does not match signing key (user %s)", id.ID, signer)
+	}
+	return doc, id, line, nil
+}
 
-	var author *Author
-	lines := bytes.Split(data, []byte("\n"))
+// ReadIdentity returns the identity a document asserts without
+// verifying its signature. It is for documents already verified, such
+// as ones read back from a store. Line 0, the sjsonl control line, is
+// skipped.
+func ReadIdentity(doc []byte) (Identity, error) {
+	id, _, err := readIdentity(doc)
+	return id, err
+}
+
+// readIdentity finds the single author line of an sjsonl document and
+// returns its identity and the line itself.
+func readIdentity(doc []byte) (Identity, []byte, error) {
+	var author []byte
+	lines := bytes.Split(doc, []byte("\n"))
 	for _, line := range lines[1:] { // skip the control line
 		if !gjson.GetBytes(line, "id").Exists() {
 			continue
 		}
 		if author != nil {
-			return nil, nil, errors.New("multiple author lines")
+			return Identity{}, nil, errors.New("multiple author lines")
 		}
-		a, err := ParseAuthorLine(line)
-		if err != nil {
-			return nil, nil, err
-		}
-		author = &a
+		author = line
 	}
 	if author == nil {
-		return nil, nil, errors.New("author line not found")
+		return Identity{}, nil, errors.New("author line not found")
 	}
 
-	if userID(doc.Info().SignerKey) != author.ID {
-		return nil, nil, errors.New("author id does not match signing key")
+	var probe struct {
+		ID       *string `json:"id"`
+		Revision *int    `json:"revision"`
 	}
+	if err := json.Unmarshal(author, &probe); err != nil || probe.ID == nil {
+		return Identity{}, nil, errors.New("author line id is not a string")
+	}
+	if probe.Revision == nil || *probe.Revision < 1 {
+		return Identity{}, nil, fmt.Errorf("author %s: revision must be an integer of at least 1", *probe.ID)
+	}
+	return Identity{ID: *probe.ID, Revision: *probe.Revision}, author, nil
+}
 
-	return author, doc, nil
+// ParseRatingset verifies a signed sjsonl ratingset and returns its
+// author line and the parsed document. On top of Verify's identity
+// checks, the author line must have a valid rating scale. Item lines are
+// not checked.
+func ParseRatingset(data []byte) (*Author, *jsonlines.JSONL, error) {
+	doc, _, line, err := verify(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	author, err := ParseAuthorLine(line)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &author, doc, nil
 }

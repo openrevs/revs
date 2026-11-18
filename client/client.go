@@ -6,7 +6,9 @@
 // documents with the revision discipline the protocol asks of clients.
 //
 // The package traffics in raw signed sjsonl documents and knows nothing
-// about their contents; domain parsing layers on top. Local state lives
+// about their contents beyond the identity binding every revs document
+// carries (ratingset.Verify: one author line whose id matches the
+// signing key, and a revision); domain parsing layers on top. Local state lives
 // behind the Store interface; the fsstore subpackage is the filesystem
 // implementation (stdlib only), and sqlitestore keeps the corpora of
 // any number of servers in a single SQLite database. A Client is safe for concurrent

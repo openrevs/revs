@@ -100,3 +100,57 @@ func TestEncodeLine(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, `{"id":"abc","max_rating":10,"min_rating":0,"revision":4}`, string(line))
 }
+
+// Verify checks only the identity binding; ParseRatingset adds the
+// rating scale. Both share one author-line scan, so they agree on it.
+func TestVerify(t *testing.T) {
+	u, other := NewUser(), NewUser()
+	sign := func(content string) []byte {
+		signed, _, err := jsonlines.Sign([]byte(content), u.PrivateKey)
+		assert.NoError(t, err)
+		return signed
+	}
+	item := `{"title":"Rocky","type":"movie"}` + "\n"
+	author := func(fields string) string { return `{"id":"` + u.ID + `"` + fields + "}\n" }
+
+	cases := []struct {
+		name          string
+		content       string
+		verify, parse bool
+	}{
+		{"complete", item + author(`,"max_rating":5,"min_rating":0,"revision":2`), true, true},
+		{"no rating scale", author(`,"revision":2`) + item, true, false},
+		{"no revision", author(`,"max_rating":5,"min_rating":0`), false, false},
+		{"revision 0", author(`,"max_rating":5,"min_rating":0,"revision":0`), false, false},
+		{"fractional revision", author(`,"max_rating":5,"min_rating":0,"revision":1.5`), false, false},
+		{"string revision", author(`,"max_rating":5,"min_rating":0,"revision":"1"`), false, false},
+		{"numeric id", `{"id":7,"revision":1}` + "\n", false, false},
+		{"other user's id", `{"id":"` + other.ID + `","max_rating":5,"min_rating":0,"revision":1}` + "\n", false, false},
+		{"two author lines", author(`,"revision":1`) + author(`,"revision":2`), false, false},
+		{"no author line", item, false, false},
+	}
+	for _, c := range cases {
+		signed := sign(c.content)
+
+		doc, id, err := Verify(signed)
+		assert.Equal(t, c.verify, err == nil, "Verify %s: %v", c.name, err)
+		if err == nil {
+			assert.Equal(t, Identity{ID: u.ID, Revision: 2}, id, c.name)
+			got, err := ReadIdentity(doc.JSON())
+			assert.NoError(t, err, c.name)
+			assert.Equal(t, id, got, c.name)
+		}
+
+		_, _, err = ParseRatingset(signed)
+		assert.Equal(t, c.parse, err == nil, "ParseRatingset %s: %v", c.name, err)
+	}
+
+	// ReadIdentity trusts the signature: it reads a tampered document.
+	signed := sign(author(`,"revision":2`))
+	tampered := bytes.Replace(signed, []byte(`"revision":2`), []byte(`"revision":9`), 1)
+	_, _, err := Verify(tampered)
+	assert.Error(t, err)
+	id, err := ReadIdentity(tampered)
+	assert.NoError(t, err)
+	assert.Equal(t, 9, id.Revision)
+}
