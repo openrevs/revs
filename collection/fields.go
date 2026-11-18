@@ -118,17 +118,17 @@ func (f *MovieFields) Parse() (MovieInput, error) {
 	}
 	if f.IMDB != "" {
 		if in.IMDB = normalizeIMDB(f.IMDB); in.IMDB == nil {
-			errs = append(errs, fmt.Errorf("IMDb id %q should look like tt0110912", f.IMDB))
+			errs = append(errs, fmt.Errorf("IMDb ID %q should look like tt0110912", f.IMDB))
 		}
 	}
 	if f.TMDB != "" {
 		if in.TMDB = normalizeTMDB(f.TMDB); in.TMDB == nil {
-			errs = append(errs, fmt.Errorf("TMDB id %q should be a number like 680", f.TMDB))
+			errs = append(errs, fmt.Errorf("TMDB ID %q should be a number like 680", f.TMDB))
 		}
 	}
 	if f.Wikidata != "" {
 		if in.Wikidata = normalizeWikidata(f.Wikidata); in.Wikidata == nil {
-			errs = append(errs, fmt.Errorf("Wikidata id %q should look like Q104123", f.Wikidata))
+			errs = append(errs, fmt.Errorf("Wikidata ID %q should look like Q104123", f.Wikidata))
 		}
 	}
 

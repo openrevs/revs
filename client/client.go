@@ -204,7 +204,7 @@ func (c *Client) resolvePin(idx *publicationIndex) (string, error) {
 		return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
 	}
 	if id := keys.UserID(pub); id != idx.ServerID {
-		return "", fmt.Errorf("client: index server id %s does not match its key (%s)", idx.ServerID, id)
+		return "", fmt.Errorf("client: index server ID %s does not match its key (%s)", idx.ServerID, id)
 	}
 
 	advertised := keys.EncodePublic(pub)

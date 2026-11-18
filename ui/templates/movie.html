@@ -1,38 +1,12 @@
 {{define "content"}}{{with .Data}}
 <p class="crumbs"><a href="/movies">← Movies</a></p>
 <div class="heading">
-  <h1>{{.Movie.Title}}{{with .Movie.Year}} <span class="muted">({{.}})</span>{{end}}</h1>
-  <a class="button" href="/movies/{{.Movie.ID}}/edit">Edit</a>
+  <h1>{{.Mine.Movie.Title}}{{with .Mine.Movie.Year}} <span class="muted">({{.}})</span>{{end}}</h1>
+  <a class="button" href="/movies/{{.Mine.Movie.ID}}/edit">Edit movie</a>
 </div>
-<p class="links">{{template "ext-links" .Movie}}</p>
+<p class="links">{{template "ext-links" .Mine.Movie}}</p>
 
-<section>
-  <h2>Your viewings</h2>
-  {{if .Viewings}}
-  <ul class="viewings">
-  {{range .Viewings}}
-    <li>
-      <div class="vhead">
-        <span class="date">{{with .ViewedOn}}{{.}}{{else}}undated{{end}}</span>
-        <span class="stars">{{stars .Rating}}</span>
-        <a class="small" href="/viewings/{{.ID}}/edit">edit</a>
-      </div>
-      {{with .Review}}<p class="review">{{.}}</p>{{end}}
-    </li>
-  {{end}}
-  </ul>
-  {{else}}
-  <p class="muted">No viewings yet.</p>
-  {{end}}
-</section>
-
-<section>
-  <h2>Add a viewing</h2>
-  <form method="post" action="/movies/{{.Movie.ID}}/viewings" class="stack">
-    {{template "viewing-fields" .Form}}
-    <div><button type="submit" class="primary">Add viewing</button></div>
-  </form>
-</section>
+{{template "mine" .Mine}}
 
 {{if .Others}}
 <section>
@@ -51,4 +25,60 @@
   </ul>
 </section>
 {{end}}
+{{end}}{{end}}
+
+{{/* Your rating, viewings, and the forms to change them: everything on
+     the page you can edit. Every change re-renders and patches this
+     whole section (see mineData in ui/handlers.go). */}}
+{{define "mine"}}
+<div id="mine">
+<div class="myrating">
+  <span class="muted">Your rating</span>
+  {{template "rate" (dict "Action" (printf "/movies/%d/rating" .Movie.ID) "Rating" .Rating "Next" (printf "/movies/%d" .Movie.ID))}}
+</div>
+
+{{if .Viewings}}
+<section>
+  <h2>{{if .Single}}Your review{{else}}Your viewings{{end}}</h2>
+  <ul class="viewings">
+  {{range .Viewings}}
+    <li id="viewing-{{.ID}}">
+    {{if eq .ID $.EditID}}
+      {{template "viewing-form" (dict "Viewing" . "Form" $.EditForm "Err" $.EditErr)}}
+    {{else}}
+      <div class="vhead">
+        {{if not $.Single}}<span class="stars">{{stars .Rating}}</span>{{end}}
+        <span class="date muted">{{if $.Single}}Watched {{end}}{{with .ViewedOn}}{{.}}{{else}}undated{{end}}</span>
+        <a class="small" href="/viewings/{{.ID}}/edit" data-on:click__prevent="@get('/movies/{{.MovieID}}/mine?edit={{.ID}}')">{{if and $.Single (not .Review)}}write a review{{else}}edit{{end}}</a>
+      </div>
+      {{with .Review}}<p class="review">{{.}}</p>{{end}}
+    {{end}}
+    </li>
+  {{end}}
+  </ul>
+</section>
+{{end}}
+
+<details class="add-viewing"{{if .AddOpen}} open{{end}}>
+  <summary>{{if .Viewings}}Watched it again? Add another viewing{{else}}Add a date or review{{end}}</summary>
+  <form method="post" action="/movies/{{.Movie.ID}}/viewings" class="stack" data-on:submit="@post('/movies/{{.Movie.ID}}/viewings', {contentType: 'form'})">
+    {{with .AddErr}}<p class="flash flash-error">{{.}}</p>{{end}}
+    {{template "viewing-fields" .Form}}
+    <div><button type="submit" class="primary">{{if .Viewings}}Add viewing{{else}}Save{{end}}</button></div>
+  </form>
+</details>
+</div>
+{{end}}
+
+{{/* A viewing edited in place: takes Viewing, Form, and Err. */}}
+{{define "viewing-form"}}{{with .Viewing}}
+<form method="post" action="/viewings/{{.ID}}" class="stack inline-edit" data-on:submit="@post('/viewings/{{.ID}}', {contentType: 'form'})">
+  {{with $.Err}}<p class="flash flash-error">{{.}}</p>{{end}}
+  {{template "viewing-fields" $.Form}}
+  <div class="actions">
+    <button type="submit" class="primary">Save</button>
+    <a href="/movies/{{.MovieID}}" data-on:click__prevent="@get('/movies/{{.MovieID}}/mine')">Cancel</a>
+    <button type="submit" class="danger" formaction="/viewings/{{.ID}}/delete" data-on:click__prevent="confirm('Delete this viewing?') && @post('/viewings/{{.ID}}/delete')">Delete viewing</button>
+  </div>
+</form>
 {{end}}{{end}}

@@ -8,7 +8,7 @@
 </section>
 <section>
   <h2>Import</h2>
-  <p>Merge a ratingset into your collection: a signed sjsonl file, or an unsigned one such as a <code>revs tui</code> <code>draft.jsonl</code>. Nothing is overwritten or deleted. Movies are matched by id or by title and year, and viewings you already have are skipped.</p>
+  <p>Merge a ratingset into your collection: a signed sjsonl file, or an unsigned one such as a <code>revs tui</code> <code>draft.jsonl</code>. Nothing is overwritten or deleted. Movies are matched by ID or by title and year, and viewings you already have are skipped.</p>
   <form method="post" action="/import" enctype="multipart/form-data" class="search">
     <input type="file" name="file" accept=".jsonl,.sjsonl,.json,application/jsonl" required>
     <button type="submit">Import</button>
@@ -16,7 +16,7 @@
 </section>
 <section>
   <h2>Import CSV</h2>
-  <p>Add movies from a CSV file, such as one exported from a spreadsheet. The first line must be a header naming the columns. Supported columns are <code>title</code> (required), <code>year</code>, <code>rating</code> (0–{{.MaxStars}} stars, halves allowed, e.g. <code>3.5</code>), <code>view_date</code> (YYYY-MM-DD), <code>imdb_id</code>, <code>imdb_id_no_tt</code> (an IMDb id without the leading <code>tt</code>, as some exports write it), <code>tmdb_id</code> and <code>review</code> (free text; quote it to include commas or line breaks); other columns are ignored. Each row is a movie, and a row with a rating, view date or review also adds a viewing. Movies are matched and merged the same way as above, and if any row is invalid nothing is imported.</p>
+  <p>Add movies from a CSV file, such as one exported from a spreadsheet. The first line must be a header naming the columns. Supported columns are <code>title</code> (required), <code>year</code>, <code>rating</code> (½–{{.MaxStars}} stars, halves allowed, e.g. <code>3.5</code>), <code>view_date</code> (YYYY-MM-DD), <code>imdb_id</code>, <code>imdb_id_no_tt</code> (an IMDb ID without the leading <code>tt</code>, as some exports write it), <code>tmdb_id</code> and <code>review</code> (free text; quote it to include commas or line breaks); other columns are ignored. Each row is a movie, and a row with a rating, view date or review also adds a viewing. Movies are matched and merged the same way as above, and if any row is invalid nothing is imported.</p>
   <form method="post" action="/import/csv" enctype="multipart/form-data" class="search">
     <input type="file" name="file" accept=".csv,text/csv" required>
     <button type="submit">Import CSV</button>

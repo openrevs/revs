@@ -6,7 +6,7 @@
     <input type="search" name="q" value="{{.Query}}" placeholder="Movie title" autofocus>
     <button type="submit">Search</button>
   </form>
-  {{template "wikidata-results" (dict "Query" .Query "Results" .Results "SearchErr" .SearchErr "Action" "/movies" "Button" "Add")}}
+  {{template "wikidata-results" (dict "Query" .Query "Results" .Results "SearchErr" .SearchErr "Action" "/movies" "Button" "Add" "Rate" true "Next" .Next "Ratings" .Ratings)}}
 </section>
 <section>
   <h2>Or enter it yourself</h2>

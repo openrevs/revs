@@ -282,7 +282,7 @@ type ImportResult struct {
 func (r ImportResult) String() string {
 	msg := r.ImportStats.String()
 	if r.ForeignUser {
-		msg += " Note: the file belongs to a different user id than your key; its reviews are now yours."
+		msg += " Note: the file belongs to a different user ID than your key; its reviews are now yours."
 	}
 	return msg
 }

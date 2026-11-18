@@ -178,9 +178,9 @@ func newMovieForm(m *localdb.Movie, mf collection.MovieFields) *movieForm {
 	f.fields = []field{
 		lineField("Title", mf.Title, "", 50),
 		lineField("Year", mf.Year, "optional", 6),
-		lineField("IMDb", mf.IMDB, "optional: an id like tt0110912, or an IMDb URL", 50),
-		lineField("TMDB", mf.TMDB, "optional: an id like 680, or a TMDB URL", 50),
-		lineField("Wikidata", mf.Wikidata, "optional: an id like Q104123, or a Wikidata URL", 50),
+		lineField("IMDb", mf.IMDB, "optional: an ID like tt0110912, or an IMDb URL", 50),
+		lineField("TMDB", mf.TMDB, "optional: an ID like 680, or a TMDB URL", 50),
+		lineField("Wikidata", mf.Wikidata, "optional: an ID like Q104123, or a Wikidata URL", 50),
 	}
 	f.setFocus(0)
 	return f
@@ -251,13 +251,14 @@ func (a *app) addMovie(in collection.MovieInput) tea.Cmd {
 		a.fail(err)
 		return nil
 	}
+	a.replace(&movieScreen{id: m.ID})
 	if existed {
 		a.info(fmt.Sprintf("%s is already in your collection.", m.Title))
-	} else {
-		a.info(fmt.Sprintf("Added %s. Press v to add a viewing.", m.Title))
+		return nil
 	}
-	a.replace(&movieScreen{id: m.ID})
-	return nil
+	// Ask for the rating straight away; esc skips it.
+	a.info(fmt.Sprintf("Added %s.", m.Title))
+	return a.askRating(m.ID, m.Title, -1)
 }
 
 func (s *movieForm) view(a *app, width, height int) string {
@@ -289,7 +290,7 @@ func newViewingForm(m localdb.Movie, v *localdb.Viewing) *viewingForm {
 	f := &viewingForm{movie: m, viewing: v}
 	f.fields = []field{
 		lineField("Date", vf.Date, "YYYY-MM-DD, or blank if you don't remember", 12),
-		lineField("Rating", vf.Rating, fmt.Sprintf("0–%d stars in steps of ½ (e.g. 3.5), or blank for no rating", collection.MaxStars), 3),
+		lineField("Rating", vf.Rating, fmt.Sprintf("½–%d stars in steps of ½ (e.g. 3.5), or blank for no rating", collection.MaxStars), 3),
 		areaField("Review", vf.Review, "", 70, 8),
 	}
 	f.setFocus(0)
@@ -498,7 +499,7 @@ func (s *searchScreen) view(a *app, width, height int) string {
 	var b strings.Builder
 	intro := "Search Wikidata and a built-in list of popular films."
 	if s.onPick != nil {
-		intro = "Pick a result to replace the title, year, and ids in the form."
+		intro = "Pick a result to replace the title, year, and IDs in the form."
 	}
 	b.WriteString(styleDim.Render(intro) + "\n\n")
 	b.WriteString(styleTitle.Render("Search ") + s.query.View() + "\n\n")

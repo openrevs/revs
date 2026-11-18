@@ -8,20 +8,12 @@
   <button type="submit">Search</button>
   {{if .Query}}<a href="/movies">Clear</a>{{end}}
 </form>
-<p class="muted">{{.Counts.Movies}} movies, {{.Counts.Viewings}} viewings.</p>
+<p class="muted">{{.Counts.Movies}} movies{{if ne .Counts.Movies .Counts.Viewings}}, {{.Counts.Viewings}} viewings{{end}}.</p>
 {{if .Movies}}
 <table class="list">
-  <thead><tr><th>Title</th><th>Year</th><th>Rating</th><th>Last seen</th><th class="num">Viewings</th></tr></thead>
+  <thead><tr><th>Title</th><th>Year</th><th>Rating</th><th>Watched</th></tr></thead>
   <tbody>
-  {{range .Movies}}
-  <tr>
-    <td><a href="/movies/{{.ID}}">{{.Title}}</a></td>
-    <td>{{with .Year}}{{.}}{{end}}</td>
-    <td class="stars">{{stars .LatestRating}}</td>
-    <td>{{.LastViewed}}</td>
-    <td class="num">{{.ViewingCount}}</td>
-  </tr>
-  {{end}}
+  {{range .Movies}}{{template "movie-row" (dict "M" . "Next" $.Data.Next)}}{{end}}
   </tbody>
 </table>
 {{else if .Query}}
@@ -29,4 +21,15 @@
 {{else}}
 <p>Your collection is empty. <a href="/movies/new">Add a movie</a>, or <a href="/data">import</a> an existing ratings file.</p>
 {{end}}
+{{end}}{{end}}
+
+{{/* One movie in the list: takes M (a row) and Next. Rating it patches
+     the row. */}}
+{{define "movie-row"}}{{with .M}}
+  <tr id="movie-{{.ID}}">
+    <td><a href="/movies/{{.ID}}">{{.Title}}</a></td>
+    <td>{{with .Year}}{{.}}{{end}}</td>
+    <td>{{template "rate" (dict "Action" (printf "/movies/%d/rating" .ID) "Rating" .LatestRating "Next" $.Next "View" "row")}}</td>
+    <td class="date">{{.LastViewed}}{{if gt .ViewingCount 1}} <span class="muted" title="{{.ViewingCount}} viewings">×{{.ViewingCount}}</span>{{end}}</td>
+  </tr>
 {{end}}{{end}}

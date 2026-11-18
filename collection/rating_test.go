@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseStars(t *testing.T) {
-	for in, want := range map[string]int64{"0": 0, "0.5": 1, ".5": 1, "3": 6, "3.5": 7, " 3½ ": 7, "½": 1, "5": 10, "5.0": 10} {
+	for in, want := range map[string]int64{"0.5": 1, ".5": 1, "3": 6, "3.5": 7, " 3½ ": 7, "½": 1, "5": 10, "5.0": 10} {
 		got, err := ParseStars(in)
 		require.NoError(t, err, in)
 		require.Equal(t, want, got, in)
@@ -16,7 +16,7 @@ func TestParseStars(t *testing.T) {
 			require.Equal(t, in, FormatStars(got))
 		}
 	}
-	for _, in := range []string{"", "-1", "5.5", "6", "3.25", "abc", "NaN", "Inf", "3½½"} {
+	for _, in := range []string{"", "0", "0.0", "-1", "5.5", "6", "3.25", "abc", "NaN", "Inf", "3½½"} {
 		_, err := ParseStars(in)
 		require.Error(t, err, in)
 	}

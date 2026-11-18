@@ -18,10 +18,10 @@ const (
 )
 
 // errStars describes the accepted star ratings.
-var errStars = fmt.Errorf("rating must be 0–%d stars, in steps of ½ (e.g. 3.5)", MaxStars)
+var errStars = fmt.Errorf("rating must be ½–%d stars, in steps of ½ (e.g. 3.5)", MaxStars)
 
-// ParseStars parses a star rating such as "4", "3.5", or "3½" into
-// half stars.
+// ParseStars parses a star rating someone entered, such as "4", "3.5",
+// or "3½", into half stars. It accepts ½ to MaxStars stars.
 func ParseStars(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	s = strings.Replace(s, "½", ".5", 1)
@@ -33,7 +33,7 @@ func ParseStars(s string) (int64, error) {
 		return 0, errStars
 	}
 	halves := f * 2
-	if halves != math.Trunc(halves) || halves < MinRating || halves > MaxRating {
+	if halves != math.Trunc(halves) || halves < MinUserRating || halves > MaxRating {
 		return 0, errStars
 	}
 	return int64(halves), nil

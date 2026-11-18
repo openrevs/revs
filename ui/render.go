@@ -54,7 +54,7 @@ var funcs = template.FuncMap{
 	"tmdbURL": func(id string) string { return collection.TMDBURL(url.PathEscape(id)) },
 	"wdURL":   func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
 	"today":   func() string { return time.Now().Format(collection.DateLayout) },
-	"ratings": ratingOptions,
+	"starbar": starSteps,
 	"timeAgo": collection.TimeAgo,
 	"dict":    dict,
 }
@@ -160,13 +160,40 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, status int, page st
 	buf.WriteTo(w)
 }
 
-// ratingOption is one choice of the rating picker, best first.
-type ratingOption struct{ Value, Stars string }
+// starStep is one half-star button of a clickable star bar: the left
+// or right half of a star, lit when the rating reaches it.
+type starStep struct {
+	Value, Label string
+	Left, On     bool
+}
 
-func ratingOptions() []ratingOption {
-	var opts []ratingOption
-	for n := int64(collection.MaxRating); n >= collection.MinRating; n-- {
-		opts = append(opts, ratingOption{Value: collection.FormatStars(n), Stars: collection.Stars(n)})
+// starSteps lays out a star bar for rating (a *int64 or int64 in half
+// stars; nil or negative is unrated).
+func starSteps(rating any) []starStep {
+	var n int64 = -1
+	switch v := rating.(type) {
+	case *int64:
+		if v != nil {
+			n = *v
+		}
+	case int64:
+		n = v
+	case string: // a form's value, e.g. "3.5" or "none"
+		if p, err := collection.ParseStars(v); err == nil {
+			n = p
+		}
 	}
-	return opts
+	steps := make([]starStep, 0, collection.MaxRating)
+	for i := int64(1); i <= collection.MaxRating; i++ {
+		label := collection.FormatStars(i)
+		label = strings.Replace(label, ".5", "½", 1)
+		label = strings.TrimPrefix(label, "0")
+		if i == 2 {
+			label += " star"
+		} else {
+			label += " stars"
+		}
+		steps = append(steps, starStep{Value: collection.FormatStars(i), Label: label, Left: i%2 == 1, On: i <= n})
+	}
+	return steps
 }

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · revs</title>
 <link rel="stylesheet" href="/static/style.css">
+<script type="module" src="/static/datastar.js"></script>
 </head>
 <body>
 <header class="top">
@@ -19,22 +20,36 @@
   <span class="whoami">{{if .UserID}}<span class="mono" title="{{.UserID}}">{{short .UserID}}</span>{{else}}<a href="/identity">no key yet</a>{{end}}</span>
 </header>
 <main>
-{{with .Flash}}<div class="flash flash-{{.Kind}}" role="status">{{.Msg}}</div>{{end}}
+{{template "flash" .Flash}}
 {{template "content" .}}
 </main>
 </body>
 </html>
 
+{{/* Messages after an action. Datastar responses patch it too. */}}
+{{define "flash"}}<div id="flash">{{with .}}<div class="flash flash-{{.Kind}}" role="status">{{.Msg}}</div>{{end}}</div>{{end}}
+
+{{/* A star picker for forms: radio buttons named "rating", one per
+     half star, plus "no rating". Takes the field's value ("3.5",
+     "none"). Works without JavaScript. */}}
 {{define "rating-input"}}
-<label>Rating
-<select name="rating" class="rating">
-  <option value="none"{{if eq .Rating "none"}} selected{{end}}>No rating</option>
-  {{range ratings}}
-  <option value="{{.Value}}"{{if eq $.Rating .Value}} selected{{end}}>{{.Stars}}&ensp;{{.Value}}</option>
-  {{end}}
-</select>
-</label>
+<fieldset class="rating-input">
+  <legend>Rating</legend>
+  <span class="starpick">{{range starbar .Rating}}<label class="{{if .Left}}l{{else}}r{{end}}" title="{{.Label}}"><input type="radio" name="rating" value="{{.Value}}" aria-label="{{.Label}}"{{if eq .Value $.Rating}} checked{{end}}></label>{{end}}</span>
+  <label class="norating"><input type="radio" name="rating" value="none"{{if eq .Rating "none" ""}} checked{{end}}> no rating</label>
+</fieldset>
 {{end}}
+
+{{/* A clickable star bar: half-star submit buttons named "rating".
+     Takes the current rating; put it inside a form. */}}
+{{define "star-buttons"}}<span class="starbar">{{range starbar .}}<button type="submit" name="rating" value="{{.Value}}" class="{{if .Left}}l{{else}}r{{end}}{{if .On}} on{{end}}" title="{{.Label}}" aria-label="Rate {{.Label}}"></button>{{end}}</span>{{end}}
+
+{{/* A star bar that sets a movie's rating in one click: takes Action
+     (the movie's /rating URL), Rating, and Next (where to come back
+     to without JavaScript). With JavaScript, the answer patches the
+     page: View "row" is a movie list row, otherwise the movie page's
+     "mine" section. */}}
+{{define "rate"}}<form class="rate" method="post" action="{{.Action}}" data-on:submit="@post('{{.Action}}', {contentType: 'form'})"><input type="hidden" name="next" value="{{.Next}}">{{with .View}}<input type="hidden" name="view" value="{{.}}">{{end}}{{template "star-buttons" .Rating}}</form>{{end}}
 
 {{define "viewing-fields"}}
 <label>Date watched <input type="date" name="viewed_on" value="{{.Date}}"></label>
@@ -48,11 +63,11 @@
   <label>Year <input name="year" value="{{.Year}}" inputmode="numeric" size="6"></label>
 </div>
 <div class="grid3">
-  <label>Wikidata id <input name="wikidata_id" value="{{.Wikidata}}" placeholder="Q104123"></label>
-  <label>IMDb id <input name="imdb_id" value="{{.IMDB}}" placeholder="tt0110912"></label>
-  <label>TMDB id <input name="tmdb_id" value="{{.TMDB}}" placeholder="680"></label>
+  <label>Wikidata ID <input name="wikidata_id" value="{{.Wikidata}}" placeholder="Q104123"></label>
+  <label>IMDb ID <input name="imdb_id" value="{{.IMDB}}" placeholder="tt0110912"></label>
+  <label>TMDB ID <input name="tmdb_id" value="{{.TMDB}}" placeholder="680"></label>
 </div>
-<p class="hint">Ids may be pasted as full URLs.</p>
+<p class="hint">IDs may be pasted as full URLs.</p>
 {{end}}
 
 {{define "ext-links"}}
@@ -67,18 +82,20 @@
 {{else}}<p class="flash flash-error">Wikidata search failed: {{.SearchErr}} You can still enter the details yourself.</p>{{end}}{{end}}
 {{if .Query}}{{if not .Results}}{{if not .SearchErr}}<p class="muted">No films found on Wikidata for “{{.Query}}”.</p>{{end}}{{end}}{{end}}
 {{if .Results}}
-<ul class="results">
+<ul class="results{{if .Rate}} rateable{{end}}">
 {{range .Results}}
   <li>
-    <form method="post" action="{{$.Action}}">
+    <form method="post" action="{{$.Action}}"{{if $.Rate}} data-on:submit="@post('{{$.Action}}', {contentType: 'form'})"{{end}}>
       <input type="hidden" name="title" value="{{.Title}}">
       <input type="hidden" name="year" value="{{with .Year}}{{.}}{{end}}">
       <input type="hidden" name="wikidata_id" value="{{.ID}}">
       <input type="hidden" name="imdb_id" value="{{deref .IMDB}}">
       <input type="hidden" name="tmdb_id" value="{{deref .TMDB}}">
+      {{if $.Rate}}<input type="hidden" name="next" value="{{$.Next}}">{{end}}
       <button type="submit">{{$.Button}}</button>
+      {{if $.Rate}}{{template "result-rate" (dict "ID" .ID "Rating" (or (index $.Ratings .ID) -1))}}{{end}}
     </form>
-    <div>
+    <div class="info">
       <strong>{{.Title}}</strong>{{with .Year}} ({{.}}){{end}}
       <div class="muted">{{.Description}}</div>
       <div class="links small">
@@ -92,3 +109,7 @@
 </ul>
 {{end}}
 {{end}}
+
+{{/* A search result's stars, which add and rate it in one click. Takes
+     ID (the Wikidata id), Rating, and, once added, URL. */}}
+{{define "result-rate"}}<div class="rate" id="rate-{{.ID}}" title="Add and rate it">{{template "star-buttons" .Rating}}{{with .URL}}<a class="small" href="{{.}}">Added</a>{{end}}</div>{{end}}

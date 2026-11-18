@@ -39,6 +39,19 @@ API, not in `cmd/revs`.
 in the wrong direction (e.g. `collection` reaching `server`). Update its
 rules deliberately if the layering changes.
 
+## Web UI interactivity
+
+`revs ui` uses Datastar (https://data-star.dev). `ui/static/datastar.js`
+is a vendored client bundle (version on its first line), and
+`ui/datastar.go` has the server side and explains the pattern: pages
+are server-rendered templates; forms and buttons stay plain HTML that
+works without JavaScript, with a `data-on:*` Datastar action added; a
+handler checks `isDatastar(r)` and answers with `a.patch` (named
+`{{define}}` fragments, morphed into the page by id) or `a.done`,
+falling back to the usual redirect. Errors and messages go to the
+shared `#flash` area. Prefer this over custom JavaScript, and keep the
+no-JavaScript path working. Test Datastar answers with `testUI.ds`.
+
 ## Testing
 
 `go test ./...` runs everything; no test needs extra processes or a

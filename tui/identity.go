@@ -90,7 +90,7 @@ func (s *identityScreen) update(a *app, msg tea.Msg) tea.Cmd {
 
 func (s *identityScreen) view(a *app, width, height int) string {
 	var b strings.Builder
-	b.WriteString(styleDim.Render(wrap("Your key signs everything you publish. Your user id is derived from it, so keep the private key safe: with it, anyone can publish as you; without it, you can't update what you published.", width)) + "\n\n")
+	b.WriteString(styleDim.Render(wrap("Your key signs everything you publish. Your user ID is derived from it, so keep the private key safe: with it, anyone can publish as you; without it, you can't update what you published.", width)) + "\n\n")
 
 	switch {
 	case s.id.KeyErr != "":
@@ -99,7 +99,7 @@ func (s *identityScreen) view(a *app, width, height int) string {
 		b.WriteString("You don't have a key yet. Press g to generate one, or i to import one (for example from revs keygen).\n")
 	default:
 		kv := func(k, v string) { b.WriteString(styleDim.Render(pad(k, 13)) + v + "\n") }
-		kv("User id", s.id.UserID)
+		kv("User ID", s.id.UserID)
 		kv("Public key", s.id.PublicKey)
 		if s.revealed != "" {
 			kv("Private key", styleWarn.Render(s.revealed))
@@ -209,7 +209,7 @@ func (s *dataScreen) view(a *app, width, height int) string {
 	}
 	b.WriteString("\n" + styleHeading.Render("Import") + "\n")
 	b.WriteString(wrap("Merge a ratingset file into your collection: a signed export, or unsigned JSON lines. "+
-		"Nothing is deleted or overwritten. Movies match by Wikidata, IMDb, or TMDB id, otherwise by title and year; "+
+		"Nothing is deleted or overwritten. Movies match by Wikidata, IMDb, or TMDB ID, otherwise by title and year; "+
 		"a viewing is added unless an identical one exists.", width) + "\n")
 	return b.String()
 }

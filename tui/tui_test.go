@@ -117,23 +117,32 @@ func TestMoviesAndViewings(t *testing.T) {
 	require.Len(t, movies, 1)
 	require.Equal(t, "Q104123", *movies[0].WikidataID)
 
+	// Adding asks for a rating straight away.
+	require.Contains(t, h.screen(), "Rate Pulp Fiction")
+	h.keys("4.5", "enter")
+	require.Contains(t, h.a.flash, "Rated Pulp Fiction ★★★★½")
+	vs, err := c.Viewings(ctx, movies[0].ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+	require.Equal(t, int64(9), *vs[0].Rating)
+
 	// The same film again leads to the existing entry.
 	h.keys("esc", "a", "pulp fiction", "enter", "enter")
 	require.Contains(t, h.a.flash, "already in your collection")
 
-	// Add a viewing: date, rating, review.
+	// Add another viewing: date, rating, review.
 	h.keys("v", "tab", "3.5", "tab", "Royale with cheese.", "ctrl+s")
 	require.Contains(t, h.a.flash, "Viewing added")
-	vs, err := c.Viewings(ctx, movies[0].ID)
+	vs, err = c.Viewings(ctx, movies[0].ID)
 	require.NoError(t, err)
-	require.Len(t, vs, 1)
+	require.Len(t, vs, 2)
 	require.Equal(t, int64(7), *vs[0].Rating, "stored in half stars")
 	require.Equal(t, "Royale with cheese.", vs[0].Review)
 	require.Contains(t, h.screen(), "★★★½☆")
 
 	// A bad rating is refused with a message.
 	h.keys("v", "tab", "9", "ctrl+s")
-	require.Contains(t, h.screen(), "Rating must be 0–5 stars")
+	require.Contains(t, h.screen(), "Rating must be ½–5 stars")
 	h.keys("esc")
 
 	// Edit the viewing.
@@ -150,6 +159,8 @@ func TestMoviesAndViewings(t *testing.T) {
 	h.keys("1", "a", "My Home Movie", "ctrl+n")
 	h.keys("tab", "2001", "ctrl+s")
 	require.Contains(t, h.a.flash, "Added My Home Movie")
+	h.keys("esc") // skip rating it
+	require.Nil(t, h.a.prompt)
 
 	// History lists the viewing.
 	h.keys("2")
@@ -177,7 +188,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 		h.a.prompt.input.SetValue(sts.URL)
 		h.keys("enter")
 		require.Contains(t, h.a.flash, "Server added")
-		h.keys("1", "a", "alien", "enter", "enter", "v", "tab", "5", "ctrl+s")
+		h.keys("1", "a", "alien", "enter", "enter", "5", "enter")
 	}
 
 	// Generating again needs confirmation.
@@ -264,4 +275,50 @@ func TestWatch(t *testing.T) {
 	poll()
 	require.Contains(t, h.a.flash, "Brazil was deleted")
 	require.Len(t, h.a.stack, 1)
+}
+
+// From the movie list, r rates the selected movie and +/- nudge it,
+// without opening it.
+func TestRateFromList(t *testing.T) {
+	h := newHarness(t, t.TempDir())
+	ctx := context.Background()
+	c := h.a.c
+	m, _, err := c.AddMovie(ctx, collection.MovieInput{Title: "Heat"})
+	require.NoError(t, err)
+	h.a.reload()
+
+	h.keys("+")
+	vs, err := c.Viewings(ctx, m.ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 1, "rating an unrated movie adds a viewing")
+	require.Equal(t, int64(5), *vs[0].Rating, "starting in the middle")
+
+	h.keys("+", "+", "-")
+	vs, err = c.Viewings(ctx, m.ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+	require.Equal(t, int64(6), *vs[0].Rating)
+
+	// - stops at ½ star.
+	for range 8 {
+		h.keys("-")
+	}
+	vs, err = c.Viewings(ctx, m.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), *vs[0].Rating)
+	h.keys("+", "+", "+", "+", "+")
+
+	h.keys("r")
+	require.Equal(t, "3", h.a.prompt.input.Value())
+	h.a.prompt.input.SetValue("")
+	h.keys("4.5", "enter")
+	vs, err = c.Viewings(ctx, m.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(9), *vs[0].Rating)
+	require.Contains(t, h.screen(), "★★★★½")
+
+	h.keys("r")
+	h.a.prompt.input.SetValue("")
+	h.keys("7", "enter")
+	require.Contains(t, h.screen(), "Rating must be")
 }

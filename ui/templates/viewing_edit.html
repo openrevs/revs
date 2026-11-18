@@ -3,7 +3,7 @@
 <h1>Edit viewing</h1>
 <form method="post" action="/viewings/{{.Viewing.ID}}" class="stack">
   {{template "viewing-fields" .Form}}
-  <div><button type="submit" class="primary">Save</button> <a href="/movies/{{.Movie.ID}}">Cancel</a></div>
+  <div class="actions"><button type="submit" class="primary">Save</button> <a href="/movies/{{.Movie.ID}}">Cancel</a></div>
 </form>
 <section class="danger">
   <form method="post" action="/viewings/{{.Viewing.ID}}/delete" onsubmit="return confirm('Delete this viewing?')">

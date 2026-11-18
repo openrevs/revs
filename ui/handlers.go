@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/collection/localdb"
 )
 
 // maxImportSize bounds an uploaded import file.
@@ -44,6 +45,8 @@ func (a *App) Handler(loopbackOnly bool) http.Handler {
 	r.Post("/movies/{id}", a.h(a.movieUpdate))
 	r.Post("/movies/{id}/delete", a.h(a.movieDelete))
 	r.Post("/movies/{id}/viewings", a.h(a.viewingCreate))
+	r.Post("/movies/{id}/rating", a.h(a.movieRate))
+	r.Get("/movies/{id}/mine", a.h(a.movieMine))
 
 	r.Get("/viewings/{id}/edit", a.h(a.viewingEdit))
 	r.Post("/viewings/{id}", a.h(a.viewingUpdate))
@@ -98,8 +101,29 @@ func requireLoopbackHost(next http.Handler) http.Handler {
 func (a *App) h(f func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		err := f(w, r)
+		if err != nil && isDatastar(r) {
+			// The page stays; say what went wrong in its flash area.
+			msg := err.Error()
+			var ue userError
+			switch {
+			case errors.As(err, &ue):
+			case errors.Is(err, collection.ErrNotFound):
+				msg = "That no longer exists. Reload the page."
+			case errors.Is(err, collection.ErrNoKey):
+				msg = "Create or import a key first."
+			default:
+				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
+			}
+			if perr := a.patchFlash(w, r, "error", msg); perr != nil {
+				log.Printf("%s %s: %v", r.Method, r.URL.Path, perr)
+			}
+			return
+		}
+		var ue userError
 		switch {
 		case err == nil:
+		case errors.As(err, &ue):
+			redirect(w, r, localNext(r, "/movies"), "error", ue.Error())
 		case errors.Is(err, collection.ErrNotFound):
 			a.render(w, r, http.StatusNotFound, "error.html", view{Title: "Not found", Data: "That page doesn't exist."})
 		case errors.Is(err, collection.ErrNoKey):
@@ -135,6 +159,7 @@ func (a *App) moviesList(w http.ResponseWriter, r *http.Request) error {
 		"Query":  q,
 		"Movies": movies,
 		"Counts": counts,
+		"Next":   r.URL.RequestURI(),
 	}})
 	return nil
 }
@@ -160,7 +185,22 @@ func viewingFields(r *http.Request) collection.ViewingFields {
 func (a *App) movieNew(w http.ResponseWriter, r *http.Request) error {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	results, searchErr := a.c.Search(r.Context(), q)
+	// Results already in the collection show their current rating.
+	ratings := map[string]int64{}
+	if len(results) > 0 {
+		mine, err := a.c.Movies(r.Context(), "")
+		if err != nil {
+			return err
+		}
+		for _, m := range mine {
+			if m.WikidataID != nil {
+				ratings[*m.WikidataID] = m.LatestRating
+			}
+		}
+	}
 	a.render(w, r, http.StatusOK, "movie_new.html", view{Title: "Add a movie", Nav: "movies", Data: map[string]any{
+		"Next":      r.URL.RequestURI(),
+		"Ratings":   ratings,
 		"Query":     q,
 		"Results":   results,
 		"SearchErr": searchErr,
@@ -172,7 +212,14 @@ func (a *App) movieNew(w http.ResponseWriter, r *http.Request) error {
 func (a *App) movieCreate(w http.ResponseWriter, r *http.Request) error {
 	form := movieFields(r)
 	in, err := form.Parse()
+	rated := r.PostFormValue("rating") != ""
+	if err == nil && rated {
+		_, err = collection.ParseStars(r.PostFormValue("rating"))
+	}
 	if err != nil {
+		if isDatastar(r) {
+			return a.patchFlash(w, r, "error", err.Error())
+		}
 		a.render(w, r, http.StatusUnprocessableEntity, "movie_new.html", view{
 			Title: "Add a movie", Nav: "movies", Flash: &flash{Kind: "error", Msg: err.Error()},
 			Data: map[string]any{"Form": form},
@@ -184,22 +231,32 @@ func (a *App) movieCreate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if existed {
-		redirect(w, r, movieURL(m.ID), "ok", fmt.Sprintf("%s is already in your collection.", m.Title))
-		return nil
+	if !rated {
+		msg := fmt.Sprintf("Added %s.", m.Title)
+		if existed {
+			msg = fmt.Sprintf("%s is already in your collection.", m.Title)
+		}
+		return a.done(w, r, movieURL(m.ID), "", "ok", msg)
 	}
-	redirect(w, r, movieURL(m.ID), "ok", fmt.Sprintf("Added %s.", m.Title))
-	return nil
+
+	// A star on a search result: add and rate in one step, and stay on
+	// the results.
+	n, msg, err := a.rate(r, m, existed)
+	if err != nil {
+		return err
+	}
+	var wd string
+	if m.WikidataID != nil {
+		wd = *m.WikidataID
+	}
+	return a.done(w, r, localNext(r, movieURL(m.ID)), "movie_new.html", "ok", msg,
+		frag("result-rate", map[string]any{"ID": wd, "Rating": n, "URL": movieURL(m.ID)}))
 }
 
-func movieURL(id int64) string { return "/movies/" + strconv.FormatInt(id, 10) }
-
-func (a *App) movieShow(w http.ResponseWriter, r *http.Request) error {
-	return a.renderMovie(w, r, http.StatusOK, nil, collection.NewViewingFields())
-}
-
-// renderMovie renders a movie's page, with form in its add-viewing form.
-func (a *App) renderMovie(w http.ResponseWriter, r *http.Request, status int, fl *flash, form collection.ViewingFields) error {
+// movieRate sets a movie's rating in one step (see
+// collection.SetRating), from a star bar, and patches the part of the
+// page the bar is in: a movie list row (view=row) or a movie's page.
+func (a *App) movieRate(w http.ResponseWriter, r *http.Request) error {
 	id, err := idParam(r, "id")
 	if err != nil {
 		return err
@@ -208,22 +265,148 @@ func (a *App) renderMovie(w http.ResponseWriter, r *http.Request, status int, fl
 	if err != nil {
 		return err
 	}
-	viewings, err := a.c.Viewings(r.Context(), id)
+	_, msg, err := a.rate(r, m, true)
 	if err != nil {
 		return err
 	}
-	others, err := a.c.OthersReviews(r.Context(), m)
+	if !isDatastar(r) {
+		redirect(w, r, localNext(r, movieURL(m.ID)), "ok", msg)
+		return nil
+	}
+	if r.PostFormValue("view") == "row" {
+		row, err := a.c.MovieSummary(r.Context(), m.ID)
+		if err != nil {
+			return err
+		}
+		return a.patch(w, r, "movies.html", &flash{Kind: "ok", Msg: msg},
+			frag("movie-row", map[string]any{"M": row, "Next": localNext(r, "/movies")}))
+	}
+	mine, err := a.mine(r, m)
+	if err != nil {
+		return err
+	}
+	return a.patch(w, r, "movie.html", &flash{Kind: "ok", Msg: msg}, frag("mine", mine))
+}
+
+// rate applies the posted rating to m, returning it and a message. A
+// bad rating is a user error, returned as errUser.
+func (a *App) rate(r *http.Request, m localdb.Movie, existed bool) (int64, string, error) {
+	n, err := collection.ParseStars(r.PostFormValue("rating"))
+	if err != nil {
+		return 0, "", userError{err}
+	}
+	if _, _, err := a.c.SetRating(r.Context(), m.ID, n); err != nil {
+		return 0, "", err
+	}
+	if !existed {
+		return n, fmt.Sprintf("Added %s, rated %s", m.Title, collection.Stars(n)), nil
+	}
+	return n, fmt.Sprintf("Rated %s %s", m.Title, collection.Stars(n)), nil
+}
+
+// userError is a mistake in what someone entered, shown to them as is.
+type userError struct{ error }
+
+// localNext returns the posted "next" page to go back to, if it is a
+// path on this site, or else fallback.
+func localNext(r *http.Request, fallback string) string {
+	next := r.PostFormValue("next")
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+		return fallback
+	}
+	return next
+}
+
+func movieURL(id int64) string { return "/movies/" + strconv.FormatInt(id, 10) }
+
+// mineData is the "mine" section of a movie's page: your rating and
+// viewings, with at most one viewing being edited in place (EditID)
+// and the add-a-viewing form.
+type mineData struct {
+	Movie    localdb.Movie
+	Viewings []localdb.Viewing
+	Rating   *int64 // the newest viewing's, which the star bar sets
+	Single   bool   // exactly one viewing, shown as "Your review"
+
+	EditID   int64
+	EditForm collection.ViewingFields
+	EditErr  string
+
+	Form    collection.ViewingFields
+	AddOpen bool
+	AddErr  string
+}
+
+// mine loads the "mine" section for m, with a blank add form and
+// nothing being edited.
+func (a *App) mine(r *http.Request, m localdb.Movie) (mineData, error) {
+	vs, err := a.c.Viewings(r.Context(), m.ID)
+	if err != nil {
+		return mineData{}, err
+	}
+	d := mineData{Movie: m, Viewings: vs, Single: len(vs) == 1, Form: collection.NewViewingFields()}
+	if len(vs) > 0 {
+		d.Rating = vs[0].Rating
+	}
+	return d, nil
+}
+
+func (a *App) movieShow(w http.ResponseWriter, r *http.Request) error {
+	id, err := idParam(r, "id")
+	if err != nil {
+		return err
+	}
+	m, err := a.c.Movie(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	mine, err := a.mine(r, m)
+	if err != nil {
+		return err
+	}
+	return a.renderMovie(w, r, http.StatusOK, nil, mine)
+}
+
+// renderMovie renders a movie's whole page around mine.
+func (a *App) renderMovie(w http.ResponseWriter, r *http.Request, status int, fl *flash, mine mineData) error {
+	others, err := a.c.OthersReviews(r.Context(), mine.Movie)
 	if err != nil {
 		log.Printf("finding others' reviews: %v", err)
 	}
-
-	a.render(w, r, status, "movie.html", view{Title: m.Title, Nav: "movies", Flash: fl, Data: map[string]any{
-		"Movie":    m,
-		"Viewings": viewings,
-		"Form":     form,
-		"Others":   others,
+	a.render(w, r, status, "movie.html", view{Title: mine.Movie.Title, Nav: "movies", Flash: fl, Data: map[string]any{
+		"Mine":   mine,
+		"Others": others,
 	}})
 	return nil
+}
+
+// movieMine re-renders a movie's "mine" section, optionally with a
+// viewing open for editing (?edit=id). Datastar only.
+func (a *App) movieMine(w http.ResponseWriter, r *http.Request) error {
+	id, err := idParam(r, "id")
+	if err != nil {
+		return err
+	}
+	if !isDatastar(r) {
+		http.Redirect(w, r, movieURL(id), http.StatusSeeOther)
+		return nil
+	}
+	m, err := a.c.Movie(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	mine, err := a.mine(r, m)
+	if err != nil {
+		return err
+	}
+	if e, err := strconv.ParseInt(r.URL.Query().Get("edit"), 10, 64); err == nil {
+		for _, v := range mine.Viewings {
+			if v.ID == e {
+				mine.EditID, mine.EditForm = v.ID, collection.ViewingFieldsFrom(v)
+			}
+		}
+	}
+	return a.patch(w, r, "movie.html", nil, frag("mine", mine))
 }
 
 func (a *App) movieEdit(w http.ResponseWriter, r *http.Request) error {
@@ -297,18 +480,46 @@ func (a *App) viewingCreate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	m, err := a.c.Movie(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	mine, err := a.mine(r, m)
+	if err != nil {
+		return err
+	}
 	form := viewingFields(r)
 	in, err := form.Parse()
 	if err != nil {
-		return a.renderMovie(w, r, http.StatusUnprocessableEntity, &flash{Kind: "error", Msg: err.Error()}, form)
+		mine.Form, mine.AddOpen = form, true
+		if isDatastar(r) {
+			mine.AddErr = err.Error()
+			return a.patch(w, r, "movie.html", nil, frag("mine", mine))
+		}
+		return a.renderMovie(w, r, http.StatusUnprocessableEntity, &flash{Kind: "error", Msg: err.Error()}, mine)
 	}
 	if _, err := a.c.AddViewing(r.Context(), id, in); err != nil {
 		return err
 	}
-	redirect(w, r, movieURL(id), "ok", "Viewing added.")
-	return nil
+	return a.doneMine(w, r, m, "Viewing added.")
 }
 
+// doneMine finishes a change to one of m's viewings: the page's "mine"
+// section is patched, or the page reloaded.
+func (a *App) doneMine(w http.ResponseWriter, r *http.Request, m localdb.Movie, msg string) error {
+	if !isDatastar(r) {
+		redirect(w, r, movieURL(m.ID), "ok", msg)
+		return nil
+	}
+	mine, err := a.mine(r, m)
+	if err != nil {
+		return err
+	}
+	return a.patch(w, r, "movie.html", &flash{Kind: "ok", Msg: msg}, frag("mine", mine))
+}
+
+// viewingEdit is the page for editing a viewing without JavaScript;
+// with it, the movie page edits viewings in place.
 func (a *App) viewingEdit(w http.ResponseWriter, r *http.Request) error {
 	id, err := idParam(r, "id")
 	if err != nil {
@@ -337,13 +548,20 @@ func (a *App) viewingUpdate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-
+	m, err := a.c.Movie(r.Context(), v.MovieID)
+	if err != nil {
+		return err
+	}
 	form := viewingFields(r)
 	in, err := form.Parse()
 	if err != nil {
-		m, merr := a.c.Movie(r.Context(), v.MovieID)
-		if merr != nil {
-			return merr
+		if isDatastar(r) {
+			mine, merr := a.mine(r, m)
+			if merr != nil {
+				return merr
+			}
+			mine.EditID, mine.EditForm, mine.EditErr = v.ID, form, err.Error()
+			return a.patch(w, r, "movie.html", nil, frag("mine", mine))
 		}
 		a.render(w, r, http.StatusUnprocessableEntity, "viewing_edit.html", view{
 			Title: "Edit viewing", Nav: "movies", Flash: &flash{Kind: "error", Msg: err.Error()},
@@ -354,8 +572,7 @@ func (a *App) viewingUpdate(w http.ResponseWriter, r *http.Request) error {
 	if err := a.c.UpdateViewing(r.Context(), id, in); err != nil {
 		return err
 	}
-	redirect(w, r, movieURL(v.MovieID), "ok", "Viewing saved.")
-	return nil
+	return a.doneMine(w, r, m, "Saved.")
 }
 
 func (a *App) viewingDelete(w http.ResponseWriter, r *http.Request) error {
@@ -367,11 +584,14 @@ func (a *App) viewingDelete(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	m, err := a.c.Movie(r.Context(), v.MovieID)
+	if err != nil {
+		return err
+	}
 	if err := a.c.DeleteViewing(r.Context(), id); err != nil {
 		return err
 	}
-	redirect(w, r, movieURL(v.MovieID), "ok", "Viewing deleted.")
-	return nil
+	return a.doneMine(w, r, m, "Viewing deleted.")
 }
 
 func (a *App) history(w http.ResponseWriter, r *http.Request) error {

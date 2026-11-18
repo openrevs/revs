@@ -38,10 +38,14 @@ import (
 // stars and MaxRating is MaxStars stars. Ratingsets declare their scale
 // on the user line, so documents using another one are rescaled on
 // import (see scaleRating).
+//
+// People rate from MinUserRating (½ star) up: no stars is a valid
+// stored rating, from imports, but not one you can enter.
 const (
-	MinRating = 0
-	MaxRating = 10
-	MaxStars  = MaxRating / 2
+	MinRating     = 0
+	MaxRating     = 10
+	MaxStars      = MaxRating / 2
+	MinUserRating = 1
 )
 
 var (

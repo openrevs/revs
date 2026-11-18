@@ -31,7 +31,7 @@ func (s *moviesScreen) load(a *app) error {
 }
 
 func (s *moviesScreen) help() string {
-	return "enter open · a add · / filter · d delete"
+	return "enter open · r rate · +/- nudge rating · a add · / filter · d delete"
 }
 
 func (s *moviesScreen) selected() (localdb.ListMoviesRow, bool) {
@@ -54,6 +54,14 @@ func (s *moviesScreen) update(a *app, msg tea.Msg) tea.Cmd {
 	case "enter":
 		if m, ok := s.selected(); ok {
 			a.push(&movieScreen{id: m.ID})
+		}
+	case "r":
+		if m, ok := s.selected(); ok {
+			return a.askRating(m.ID, m.Title, m.LatestRating)
+		}
+	case "+", "=", "-":
+		if m, ok := s.selected(); ok {
+			a.nudgeRating(m.ID, m.Title, m.LatestRating, k.String() == "-")
 		}
 	case "a":
 		a.push(newSearchScreen(s.query, nil))
@@ -83,7 +91,10 @@ func (s *moviesScreen) update(a *app, msg tea.Msg) tea.Cmd {
 }
 
 func (s *moviesScreen) view(a *app, width, height int) string {
-	head := fmt.Sprintf("%d movies, %d viewings", s.counts.Movies, s.counts.Viewings)
+	head := fmt.Sprintf("%d movies", s.counts.Movies)
+	if s.counts.Viewings != s.counts.Movies {
+		head += fmt.Sprintf(", %d viewings", s.counts.Viewings)
+	}
 	if s.query != "" {
 		head = fmt.Sprintf("%d matching %q", len(s.movies), s.query) + styleDim.Render(" (/ to change)")
 	}
@@ -103,20 +114,56 @@ func (s *moviesScreen) view(a *app, width, height int) string {
 		if sel {
 			t = styleSelected.Render(t)
 		}
-		var meta string
-		switch m.ViewingCount {
-		case 0:
-			meta = "no viewings"
-		case 1:
-			meta = "1 viewing"
-		default:
-			meta = fmt.Sprintf("%d viewings", m.ViewingCount)
-		}
-		if m.LastViewed != "" {
-			meta += ", " + m.LastViewed
+		meta := m.LastViewed
+		if m.ViewingCount == 0 {
+			meta = "not rated"
+		} else if m.ViewingCount > 1 {
+			meta += fmt.Sprintf(" ×%d", m.ViewingCount)
 		}
 		return t + "  " + styleStars.Render(collection.Stars(m.LatestRating)) + "  " + styleDim.Render(meta)
 	})
+}
+
+// askRating prompts for a movie's rating and sets it in one step (see
+// collection.SetRating). current is in half stars, or -1 if unrated.
+func (a *app) askRating(id int64, title string, current int64) tea.Cmd {
+	initial := ""
+	if current >= 0 {
+		initial = collection.FormatStars(current)
+	}
+	return a.ask(fmt.Sprintf("Rate %s (½–%d, e.g. 3.5):", title, collection.MaxStars), initial, func(a *app, v string) tea.Cmd {
+		if v == "" {
+			return nil
+		}
+		n, err := collection.ParseStars(v)
+		if err != nil {
+			a.fail(err)
+			return nil
+		}
+		a.setRating(id, title, n)
+		return nil
+	})
+}
+
+// nudgeRating moves a movie's rating up or down half a star.
+func (a *app) nudgeRating(id int64, title string, current int64, down bool) {
+	n := current + 1
+	if down {
+		n = current - 1
+	}
+	if current < 0 {
+		n = collection.MaxRating / 2 // start in the middle
+	}
+	a.setRating(id, title, min(max(n, collection.MinUserRating), collection.MaxRating))
+}
+
+func (a *app) setRating(id int64, title string, n int64) {
+	if _, _, err := a.c.SetRating(a.ctx, id, n); err != nil {
+		a.fail(err)
+	} else {
+		a.info(fmt.Sprintf("Rated %s %s", title, collection.Stars(n)))
+	}
+	a.reload()
 }
 
 func movieTitle(title string, year *int64) string {
@@ -159,11 +206,24 @@ func (s *movieScreen) load(a *app) error {
 }
 
 func (s *movieScreen) help() string {
-	h := "v add viewing"
-	if len(s.viewings) > 0 {
-		h += " · enter edit viewing · x delete viewing"
+	var h string
+	switch len(s.viewings) {
+	case 0:
+		h = "r rate · v add date or review"
+	case 1:
+		h = "r rate · +/- nudge · enter edit review · v add another viewing · x delete review"
+	default:
+		h = "r rate latest · +/- nudge · enter edit viewing · v add viewing · x delete viewing"
 	}
 	return h + " · e edit movie · D delete movie"
+}
+
+// rating is the movie's current rating: its latest viewing's, or -1.
+func (s *movieScreen) rating() int64 {
+	if len(s.viewings) == 0 || s.viewings[0].Rating == nil {
+		return -1
+	}
+	return *s.viewings[0].Rating
 }
 
 func (s *movieScreen) selected() (localdb.Viewing, bool) {
@@ -185,10 +245,15 @@ func (s *movieScreen) update(a *app, msg tea.Msg) tea.Cmd {
 	switch k.String() {
 	case "v", "a":
 		return a.pushForm(newViewingForm(s.movie, nil))
+	case "r":
+		return a.askRating(s.movie.ID, s.movie.Title, s.rating())
+	case "+", "=", "-":
+		a.nudgeRating(s.movie.ID, s.movie.Title, s.rating(), k.String() == "-")
 	case "enter":
 		if v, ok := s.selected(); ok {
 			return a.pushForm(newViewingForm(s.movie, &v))
 		}
+		return a.askRating(s.movie.ID, s.movie.Title, s.rating())
 	case "x":
 		if v, ok := s.selected(); ok {
 			when := "this undated viewing"
@@ -230,9 +295,13 @@ func (s *movieScreen) view(a *app, width, height int) string {
 		b.WriteString(links + "\n")
 	}
 
-	b.WriteString("\n" + styleHeading.Render("Your viewings") + "\n")
+	heading := "Your viewings"
+	if len(s.viewings) <= 1 {
+		heading = "Your review"
+	}
+	b.WriteString("\n" + styleHeading.Render(heading) + "\n")
 	if len(s.viewings) == 0 {
-		b.WriteString(styleDim.Render("  No viewings yet. Press v to add one.") + "\n")
+		b.WriteString(styleDim.Render("  Not rated yet. Press r to rate it.") + "\n")
 	} else {
 		listH := min(len(s.viewings), max(height/3, 3))
 		b.WriteString(s.cur.render(len(s.viewings), listH, func(i int, sel bool) string {
@@ -241,7 +310,7 @@ func (s *movieScreen) view(a *app, width, height int) string {
 			if v.ViewedOn == nil {
 				date = styleDim.Render(pad("undated", 10))
 			}
-			line := date + "  " + styleStars.Render(collection.Stars(v.Rating))
+			line := styleStars.Render(collection.Stars(v.Rating)) + "  " + date
 			if v.Review != "" {
 				line += "  " + styleDim.Render(truncate(firstLine(v.Review), width-26))
 			}

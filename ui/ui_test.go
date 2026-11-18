@@ -120,10 +120,12 @@ func TestCollectionCRUD(t *testing.T) {
 	require.Contains(t, page, "Great.")
 	require.Contains(t, page, "★★★★★")
 
-	u.post("/viewings/2", url.Values{"viewed_on": {"2025-01-02"}, "rating": {"0"}, "review": {""}})
+	loc, _ = u.post("/viewings/2", url.Values{"viewed_on": {"2025-01-02"}, "rating": {"0"}, "review": {""}})
+	require.Empty(t, loc, "no stars is refused; ½ is the least")
+	u.post("/viewings/2", url.Values{"viewed_on": {"2025-01-02"}, "rating": {"0.5"}, "review": {""}})
 	v, err := u.app.c.Viewing(ctx, 2)
 	require.NoError(t, err)
-	require.Equal(t, int64(0), *v.Rating)
+	require.Equal(t, int64(1), *v.Rating)
 
 	require.Contains(t, u.get("/movies?q=pulp"), "Pulp Fiction")
 	require.NotContains(t, u.get("/movies?q=brazil"), "/movies/1\"")
@@ -410,8 +412,8 @@ func TestImportCSV(t *testing.T) {
 	// Bad files are rejected whole.
 	for file, want := range map[string]string{
 		"year,rating\n1994,5\n":                                 `must include a &#34;title&#34; column`,
-		"title,rating\nOk,3\nAliens,9\n":                        "line 3: rating must be 0–5 stars",
-		"title,rating\nOk,3\nAliens,3.25\n":                     "line 3: rating must be 0–5 stars, in steps of ½",
+		"title,rating\nOk,3\nAliens,9\n":                        "line 3: rating must be ½–5 stars",
+		"title,rating\nOk,3\nAliens,3.25\n":                     "line 3: rating must be ½–5 stars, in steps of ½",
 		"title,view_date\nAliens,01/02/2020\n":                  `line 2: date &#34;01/02/2020&#34; should be YYYY-MM-DD`,
 		"title,year\n,1994\n":                                   "line 2: title is required",
 		"title\n":                                               "no rows after the header",
@@ -526,4 +528,148 @@ func TestRevisionsSharedAcrossServers(t *testing.T) {
 	_, msg = u.post("/servers/1/push", nil)
 	require.Contains(t, msg, "Pushed revision 2")
 	require.Equal(t, 2, exportRev())
+}
+
+// ds sends a Datastar request (as datastar.js does for a form) and
+// returns the SSE answer's body.
+func (u *testUI) ds(method, path string, form url.Values) string {
+	u.t.Helper()
+	req, err := http.NewRequest(method, u.ts.URL+path, strings.NewReader(form.Encode()))
+	require.NoError(u.t, err)
+	req.Header.Set("Datastar-Request", "true")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	resp, err := u.c.Do(req)
+	require.NoError(u.t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(u.t, err)
+	require.Equal(u.t, http.StatusOK, resp.StatusCode, "%s %s: %s", method, path, body)
+	require.Equal(u.t, "text/event-stream", resp.Header.Get("Content-Type"))
+	return string(body)
+}
+
+// One click rates a movie: from a search result (adding it), from the
+// movie list, and from a movie's page, with or without JavaScript.
+func TestQuickRating(t *testing.T) {
+	u := newTestUI(t)
+	ctx := context.Background()
+
+	// Without JavaScript, a star on a search result adds and rates, then
+	// returns to the results.
+	loc, msg := u.post("/movies", url.Values{
+		"title": {"Alien"}, "year": {"1979"}, "wikidata_id": {"Q103569"},
+		"rating": {"4.5"}, "next": {"/movies/new?q=alien"},
+	})
+	require.Equal(t, "/movies/new?q=alien", loc)
+	require.Contains(t, msg, "Added Alien, rated ★★★★½")
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+	require.Equal(t, int64(9), *vs[0].Rating)
+
+	// With it, the result's stars are patched in place.
+	sse := u.ds("POST", "/movies", url.Values{
+		"title": {"Aliens"}, "year": {"1986"}, "wikidata_id": {"Q103474"}, "rating": {"4"},
+	})
+	require.Contains(t, sse, "event: datastar-patch-elements")
+	require.Contains(t, sse, `id="rate-Q103474"`)
+	require.Contains(t, sse, `href="/movies/2">Added`)
+	require.Contains(t, sse, "Added Aliens, rated ★★★★☆")
+
+	// Rating again from the list changes that rating, not a new viewing.
+	loc, msg = u.post("/movies/1/rating", url.Values{"rating": {"3"}, "next": {"/movies?q=al"}})
+	require.Equal(t, "/movies?q=al", loc)
+	require.Contains(t, msg, "Rated Alien ★★★☆☆")
+	vs, err = u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+	require.Equal(t, int64(6), *vs[0].Rating)
+
+	// next must stay on this site.
+	loc, _ = u.post("/movies/1/rating", url.Values{"rating": {"3"}, "next": {"//evil.example/"}})
+	require.Equal(t, "/movies/1", loc)
+
+	// From the list with JavaScript, the row is patched.
+	sse = u.ds("POST", "/movies/1/rating", url.Values{"rating": {"2.5"}, "view": {"row"}})
+	require.Contains(t, sse, `<tr id="movie-1">`)
+	require.Equal(t, 5, strings.Count(sse, `class="l on"`)+strings.Count(sse, `class="r on"`))
+	require.Contains(t, sse, "Rated Alien ★★½☆☆")
+
+	// From the movie page, its "mine" section is.
+	sse = u.ds("POST", "/movies/1/rating", url.Values{"rating": {"5"}})
+	require.Contains(t, sse, `<div id="mine">`)
+
+	// No stars, or a nonsense rating, is refused with a message.
+	for _, bad := range []string{"0", "6"} {
+		sse = u.ds("POST", "/movies/1/rating", url.Values{"rating": {bad}})
+		require.Contains(t, sse, "flash-error")
+		require.Contains(t, sse, "rating must be ½–5 stars")
+	}
+	loc, msg = u.post("/movies/1/rating", url.Values{"rating": {"0"}, "next": {"/movies"}})
+	require.Equal(t, "/movies", loc)
+	require.Contains(t, msg, "rating must be")
+
+	// The list shows lit star bars.
+	page := u.get("/movies")
+	require.Contains(t, page, `action="/movies/1/rating"`)
+	require.Contains(t, page, `data-on:submit`)
+}
+
+// A movie's page edits viewings in place: open one, save it (or get
+// its error back in place), add another, and delete one.
+func TestInlineViewings(t *testing.T) {
+	u := newTestUI(t)
+	ctx := context.Background()
+	u.post("/movies", url.Values{"title": {"Heat"}, "year": {"1995"}})
+
+	page := u.get("/movies/1")
+	require.Contains(t, page, "Edit movie")
+	require.Contains(t, page, `<div id="mine">`)
+	require.Contains(t, page, "Add a date or review")
+
+	sse := u.ds("POST", "/movies/1/viewings", url.Values{"viewed_on": {"2024-05-01"}, "rating": {"4"}, "review": {"Great diner scene."}})
+	require.Contains(t, sse, "Your review")
+	require.Contains(t, sse, "Great diner scene.")
+	require.Contains(t, sse, "Viewing added.")
+
+	// Opening it for editing.
+	sse = u.ds("GET", "/movies/1/mine?edit=1", nil)
+	require.Contains(t, sse, `action="/viewings/1"`)
+	require.Contains(t, sse, `value="4" aria-label="4 stars" checked`)
+
+	// A bad date comes back in the open form, keeping what was typed.
+	sse = u.ds("POST", "/viewings/1", url.Values{"viewed_on": {"someday"}, "rating": {"4"}, "review": {"Edited."}})
+	require.Contains(t, sse, `action="/viewings/1"`)
+	require.Contains(t, sse, "should be YYYY-MM-DD")
+	require.Contains(t, sse, "Edited.")
+
+	sse = u.ds("POST", "/viewings/1", url.Values{"viewed_on": {"2024-05-02"}, "rating": {"none"}, "review": {"Edited."}})
+	require.NotContains(t, sse, `action="/viewings/1"`, "closed again")
+	require.Contains(t, sse, "Saved.")
+	v, err := u.app.c.Viewing(ctx, 1)
+	require.NoError(t, err)
+	require.Nil(t, v.Rating)
+	require.Equal(t, "Edited.", v.Review)
+
+	// A second viewing turns "Your review" into a list.
+	sse = u.ds("POST", "/movies/1/viewings", url.Values{"viewed_on": {"2025-01-01"}, "rating": {"3.5"}})
+	require.Contains(t, sse, "Your viewings")
+	sse = u.ds("POST", "/movies/1/viewings", url.Values{"viewed_on": {"bad"}})
+	require.Contains(t, sse, "<details class=\"add-viewing\" open>")
+	require.Contains(t, sse, "should be YYYY-MM-DD")
+
+	sse = u.ds("POST", "/viewings/1/delete", nil)
+	require.Contains(t, sse, "Viewing deleted.")
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+
+	// A viewing that's gone: the page says so instead of breaking.
+	sse = u.ds("POST", "/viewings/1/delete", nil)
+	require.Contains(t, sse, "no longer exists")
+
+	// Without JavaScript the old edit page still works.
+	require.Contains(t, u.get("/viewings/2/edit"), "Edit viewing")
 }

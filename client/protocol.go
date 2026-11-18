@@ -84,7 +84,7 @@ func parseEntryName(name string) (entryName, error) {
 		return en, fmt.Errorf("client: malformed archive entry name %q", name)
 	}
 	if !isUserID(fields[0]) {
-		return en, fmt.Errorf("client: archive entry %q has an invalid user id", name)
+		return en, fmt.Errorf("client: archive entry %q has an invalid user ID", name)
 	}
 	en.userID = fields[0]
 

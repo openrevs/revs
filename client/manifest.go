@@ -146,7 +146,7 @@ func parseManifest(gz []byte, pin string, want manifestWant) (*manifest, error) 
 				return nil, errors.New("snapshot manifest lists a removal")
 			}
 			if !isUserID(id) {
-				return nil, fmt.Errorf("manifest removes invalid user id %q", id)
+				return nil, fmt.Errorf("manifest removes invalid user ID %q", id)
 			}
 			if removed[id] {
 				return nil, fmt.Errorf("manifest removes user %s twice", id)
@@ -209,7 +209,7 @@ func checkManifestMeta(line []byte, want manifestWant) error {
 
 func checkManifestEntry(e manifestEntry, want manifestWant) error {
 	if !isUserID(e.ID) {
-		return fmt.Errorf("manifest entry has invalid user id %q", e.ID)
+		return fmt.Errorf("manifest entry has invalid user ID %q", e.ID)
 	}
 	if e.Rev < 1 || e.Hash == "" {
 		return fmt.Errorf("manifest entry for user %s has no valid rev or hash", e.ID)

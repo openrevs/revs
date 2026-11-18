@@ -29,6 +29,25 @@ func (c *Collection) Movies(ctx context.Context, query string) ([]localdb.ListMo
 	return c.q.ListMovies(ctx, strings.TrimSpace(query))
 }
 
+// MovieSummary is one movie as Movies lists it, with its viewing
+// summary.
+func (c *Collection) MovieSummary(ctx context.Context, id int64) (localdb.ListMoviesRow, error) {
+	m, err := c.Movie(ctx, id)
+	if err != nil {
+		return localdb.ListMoviesRow{}, err
+	}
+	rows, err := c.q.ListMovies(ctx, m.Title)
+	if err != nil {
+		return localdb.ListMoviesRow{}, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return localdb.ListMoviesRow{}, ErrNotFound
+}
+
 // AllMovies lists every movie.
 func (c *Collection) AllMovies(ctx context.Context) ([]localdb.Movie, error) {
 	return c.q.AllMovies(ctx)
@@ -109,6 +128,31 @@ func (c *Collection) UpdateViewing(ctx context.Context, id int64, in ViewingInpu
 	return c.q.UpdateViewing(ctx, localdb.UpdateViewingParams{
 		ViewedOn: in.Date, Rating: in.Rating, Review: in.Review, ID: id,
 	})
+}
+
+// SetRating is the one-step way to rate a movie: it sets the rating
+// (in half stars) on the movie's latest viewing, keeping its date and
+// review, or, when the movie has no viewings yet, adds one dated today.
+// It reports whether it added a viewing.
+func (c *Collection) SetRating(ctx context.Context, movieID int64, rating int64) (v localdb.Viewing, added bool, err error) {
+	if rating < MinUserRating || rating > MaxRating {
+		return v, false, errStars
+	}
+	vs, err := c.Viewings(ctx, movieID)
+	if err != nil {
+		return v, false, err
+	}
+	if len(vs) == 0 {
+		today := time.Now().Format(DateLayout)
+		v, err = c.AddViewing(ctx, movieID, ViewingInput{Date: &today, Rating: &rating})
+		return v, err == nil, err
+	}
+	v = vs[0] // newest first
+	v.Rating = &rating
+	err = c.q.UpdateViewing(ctx, localdb.UpdateViewingParams{
+		ViewedOn: v.ViewedOn, Rating: v.Rating, Review: v.Review, ID: v.ID,
+	})
+	return v, false, err
 }
 
 func (c *Collection) DeleteViewing(ctx context.Context, id int64) error {

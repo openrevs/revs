@@ -96,7 +96,7 @@ func (s *Store) SaveState(state *client.State) error {
 
 func (s *Store) historyPath(userID string) (string, error) {
 	if userID == "" || !isLowerHex(userID) {
-		return "", fmt.Errorf("fsstore: invalid user id %q", userID)
+		return "", fmt.Errorf("fsstore: invalid user ID %q", userID)
 	}
 
 	return filepath.Join(s.root, "history", userID+".json"), nil
