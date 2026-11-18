@@ -17,24 +17,19 @@ import (
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/publication"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 // Publishing: see specs/publishing-v2.md in the website repo.
 
 const (
-	kindPatch    = "patch"
-	kindSnapshot = "snapshot"
-
 	// ChannelMain is the server's primary feed: every user's latest
-	// accepted document.
-	ChannelMain = "main"
+	// accepted document (publication.ChannelMain).
+	ChannelMain = publication.ChannelMain
 	// ChannelDirect holds only documents uploaded to this server
-	// directly.
-	ChannelDirect = "direct"
-
-	// manifestFormat is the manifest format version.
-	manifestFormat = 1
+	// directly (publication.ChannelDirect).
+	ChannelDirect = publication.ChannelDirect
 )
 
 // channel is one publication channel: a name and the documents it
@@ -78,65 +73,6 @@ func (s *Server) defaultChannels() []channel {
 		{name: ChannelMain, members: s.dal.LatestDocuments},
 		{name: ChannelDirect, members: s.dal.LatestDirectDocuments},
 	}
-}
-
-// publicationIndex is /v1/index.json.
-type publicationIndex struct {
-	Created   string                   `json:"created"`
-	ServerID  string                   `json:"server_id"`
-	ServerKey string                   `json:"server_key"`
-	Channels  map[string]*channelIndex `json:"channels"`
-}
-
-type channelIndex struct {
-	Epoch     int            `json:"epoch"`
-	Snapshots []snapshotInfo `json:"snapshots"`
-	Patches   []patchInfo    `json:"patches"`
-}
-
-type snapshotInfo struct {
-	Epoch   int    `json:"epoch"`
-	Parts   int    `json:"parts"`
-	Created string `json:"created"`
-}
-
-type patchInfo struct {
-	Range   [2]int `json:"range"`
-	Parts   int    `json:"parts"`
-	Created string `json:"created"`
-}
-
-// Manifest lines. A manifest is an sjsonl document signed with the
-// server key; sjsonl sorts lines by hash, so consumers tell the kinds
-// apart by their fields.
-
-// manifestMeta is a manifest's one metadata line, naming the
-// publication it describes.
-type manifestMeta struct {
-	Manifest string  `json:"manifest"` // kindSnapshot or kindPatch
-	ServerID string  `json:"server_id"`
-	Channel  string  `json:"channel"`
-	Epoch    int     `json:"epoch,omitempty"` // snapshots
-	Range    *[2]int `json:"range,omitempty"` // patches
-	Created  string  `json:"created"`
-	Format   int     `json:"format"`
-}
-
-// manifestEntry describes one archive entry: the document it yields,
-// the base it patches (sjsonl patches only), and the part holding it.
-type manifestEntry struct {
-	ID       string `json:"id"`
-	Rev      int    `json:"rev"`
-	Hash     string `json:"hash"`
-	BaseRev  int    `json:"base_rev,omitempty"`
-	BaseHash string `json:"base_hash,omitempty"`
-	Part     int    `json:"part"`
-}
-
-// manifestRemoval lists one user that left the channel in a patch's
-// range.
-type manifestRemoval struct {
-	Removed string `json:"removed"`
 }
 
 func (s *Server) serverID() string {
@@ -232,7 +168,7 @@ func (s *Server) cutChannel(ctx context.Context, ch channel) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	artifacts = append(artifacts, &domain.Artifact{Kind: kindPatch, Start: cur, End: epoch, Parts: parts, Created: created})
+	artifacts = append(artifacts, &domain.Artifact{Kind: publication.KindPatch, Start: cur, End: epoch, Parts: parts, Created: created})
 
 	// Compacted patches cover aligned ranges [epoch-n, epoch], so a stale
 	// consumer holding a boundary's state catches up in one step.
@@ -249,7 +185,7 @@ func (s *Server) cutChannel(ctx context.Context, ch channel) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		artifacts = append(artifacts, &domain.Artifact{Kind: kindPatch, Start: start, End: epoch, Parts: parts, Created: created})
+		artifacts = append(artifacts, &domain.Artifact{Kind: publication.KindPatch, Start: start, End: epoch, Parts: parts, Created: created})
 	}
 
 	if epoch == 1 || (s.snapshotEvery > 0 && epoch%s.snapshotEvery == 0) {
@@ -257,7 +193,7 @@ func (s *Server) cutChannel(ctx context.Context, ch channel) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		artifacts = append(artifacts, &domain.Artifact{Kind: kindSnapshot, Start: epoch, End: epoch, Parts: parts, Created: created})
+		artifacts = append(artifacts, &domain.Artifact{Kind: publication.KindSnapshot, Start: epoch, End: epoch, Parts: parts, Created: created})
 	}
 
 	if err := s.dal.RecordCut(ctx, ch.name, epoch, created, changes, artifacts); err != nil {
@@ -277,14 +213,6 @@ func byUser(docs []*domain.Document) map[string]*domain.Document {
 	return m
 }
 
-func docEntryName(userid string, rev int) string {
-	return fmt.Sprintf("%s-%d.sjsonl", userid, rev)
-}
-
-func patchEntryName(userid string, base, target int) string {
-	return fmt.Sprintf("%s-%d-%d.sjsonl", userid, base, target)
-}
-
 // writePatch publishes patch-<start>-<end> and its manifest, taking a
 // consumer from the channel state from (at start) to the state to (at
 // end). Changed users get an sjsonl patch from their rev at start, or
@@ -292,7 +220,7 @@ func patchEntryName(userid string, base, target int) string {
 // the full document; users that left are listed as removals in the
 // manifest.
 func (s *Server) writePatch(dir, chName string, start, end int, from map[string]*domain.Document, to []*domain.Document, created time.Time) (int, error) {
-	base := fmt.Sprintf("patch-%d-%d", start, end)
+	base := publication.PatchBase(start, end)
 	w, err := newArchiveWriter(s.pub, dir, base, s.partSize, created)
 	if err != nil {
 		return 0, err
@@ -307,7 +235,7 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 	}
 	for _, id := range slices.Sorted(maps.Keys(from)) {
 		if !inTo[id] {
-			lines = append(lines, manifestRemoval{Removed: id})
+			lines = append(lines, publication.ManifestRemoval{Removed: id})
 		}
 	}
 
@@ -322,8 +250,8 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 			return 0, fmt.Errorf("loading document %s: %w", d.Hash, err)
 		}
 
-		entry := manifestEntry{ID: d.Userid, Rev: d.Rev, Hash: d.Hash}
-		name, data := docEntryName(d.Userid, d.Rev), target
+		entry := publication.ManifestEntry{ID: d.Userid, Rev: d.Rev, Hash: d.Hash}
+		name, data := publication.EntryName{UserID: d.Userid, Rev: d.Rev}.String(), target
 		if had {
 			baseData, err := s.docs.Get(prev.Hash)
 			if err != nil {
@@ -334,7 +262,7 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 				return 0, fmt.Errorf("diffing %s: %w", d.Userid, err)
 			}
 			if len(patch) < len(target) {
-				name, data = patchEntryName(d.Userid, prev.Rev, d.Rev), patch
+				name, data = publication.EntryName{UserID: d.Userid, BaseRev: prev.Rev, Rev: d.Rev}.String(), patch
 				entry.BaseRev, entry.BaseHash = prev.Rev, prev.Hash
 			}
 		}
@@ -352,8 +280,8 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 	}
 
 	rng := [2]int{start, end}
-	meta := manifestMeta{Manifest: kindPatch, Channel: chName, Range: &rng}
-	if err := s.writeManifest(path.Join(dir, "patch-manifest-"+strings.TrimPrefix(base, "patch-")+".sjsonl.gz"), meta, created, lines); err != nil {
+	meta := publication.ManifestMeta{Manifest: publication.KindPatch, Channel: chName, Range: &rng}
+	if err := s.writeManifest(path.Join(dir, publication.PatchManifestName(start, end)), meta, created, lines); err != nil {
 		return 0, err
 	}
 
@@ -363,7 +291,7 @@ func (s *Server) writePatch(dir, chName string, start, end int, from map[string]
 // writeSnapshot publishes snapshot-<epoch> and its manifest: the full
 // document of every user in the channel at that epoch.
 func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Document, created time.Time) (int, error) {
-	w, err := newArchiveWriter(s.pub, dir, fmt.Sprintf("snapshot-%d", epoch), s.partSize, created)
+	w, err := newArchiveWriter(s.pub, dir, publication.SnapshotBase(epoch), s.partSize, created)
 	if err != nil {
 		return 0, err
 	}
@@ -375,11 +303,11 @@ func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Doc
 		if err != nil {
 			return 0, fmt.Errorf("loading document %s: %w", d.Hash, err)
 		}
-		part, err := w.Add(docEntryName(d.Userid, d.Rev), data)
+		part, err := w.Add(publication.EntryName{UserID: d.Userid, Rev: d.Rev}.String(), data)
 		if err != nil {
 			return 0, err
 		}
-		lines = append(lines, manifestEntry{ID: d.Userid, Rev: d.Rev, Hash: d.Hash, Part: part})
+		lines = append(lines, publication.ManifestEntry{ID: d.Userid, Rev: d.Rev, Hash: d.Hash, Part: part})
 	}
 
 	parts, err := w.Close()
@@ -387,8 +315,8 @@ func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Doc
 		return 0, err
 	}
 
-	meta := manifestMeta{Manifest: kindSnapshot, Channel: chName, Epoch: epoch}
-	if err := s.writeManifest(path.Join(dir, fmt.Sprintf("snapshot-manifest-%d.sjsonl.gz", epoch)), meta, created, lines); err != nil {
+	meta := publication.ManifestMeta{Manifest: publication.KindSnapshot, Channel: chName, Epoch: &epoch}
+	if err := s.writeManifest(path.Join(dir, publication.SnapshotManifestName(epoch)), meta, created, lines); err != nil {
 		return 0, err
 	}
 
@@ -397,10 +325,10 @@ func (s *Server) writeSnapshot(dir, chName string, epoch int, docs []*domain.Doc
 
 // writeManifest signs a manifest with the server key and writes it,
 // gzipped, to name in the publications (atomically, like the archives).
-func (s *Server) writeManifest(name string, meta manifestMeta, created time.Time, lines []any) error {
+func (s *Server) writeManifest(name string, meta publication.ManifestMeta, created time.Time, lines []any) error {
 	meta.ServerID = s.serverID()
 	meta.Created = created.UTC().Format(time.RFC3339)
-	meta.Format = manifestFormat
+	meta.Format = publication.ManifestFormat
 
 	var buf bytes.Buffer
 	for _, line := range append([]any{meta}, lines...) {
@@ -429,13 +357,13 @@ func (s *Server) writeManifest(name string, meta manifestMeta, created time.Time
 	return s.pub.WriteFile(name, gz.Bytes())
 }
 
-// writeIndex regenerates /v1/index.json from the database.
+// writeIndex regenerates the publication index from the database.
 func (s *Server) writeIndex(ctx context.Context) error {
-	idx := publicationIndex{
+	idx := publication.Index{
 		Created:   now().Format(time.RFC3339),
 		ServerID:  s.serverID(),
 		ServerKey: keys.EncodePublic(s.key.Public().(ed25519.PublicKey)),
-		Channels:  map[string]*channelIndex{},
+		Channels:  map[string]*publication.Channel{},
 	}
 
 	for _, ch := range s.channels {
@@ -448,19 +376,19 @@ func (s *Server) writeIndex(ctx context.Context) error {
 			return err
 		}
 
-		ci := &channelIndex{Epoch: epoch, Snapshots: []snapshotInfo{}, Patches: []patchInfo{}}
+		ci := &publication.Channel{Epoch: epoch, Snapshots: []publication.Snapshot{}, Patches: []publication.Patch{}}
 		for _, a := range arts {
 			created := a.Created.UTC().Format(time.RFC3339)
 			switch a.Kind {
-			case kindSnapshot:
-				ci.Snapshots = append(ci.Snapshots, snapshotInfo{Epoch: a.End, Parts: a.Parts, Created: created})
-			case kindPatch:
-				ci.Patches = append(ci.Patches, patchInfo{Range: [2]int{a.Start, a.End}, Parts: a.Parts, Created: created})
+			case publication.KindSnapshot:
+				ci.Snapshots = append(ci.Snapshots, publication.Snapshot{Epoch: a.End, Parts: a.Parts, Created: created})
+			case publication.KindPatch:
+				ci.Patches = append(ci.Patches, publication.Patch{Range: [2]int{a.Start, a.End}, Parts: a.Parts, Created: created})
 			}
 		}
-		slices.SortFunc(ci.Snapshots, func(a, b snapshotInfo) int { return cmp.Compare(a.Epoch, b.Epoch) })
+		slices.SortFunc(ci.Snapshots, func(a, b publication.Snapshot) int { return cmp.Compare(a.Epoch, b.Epoch) })
 		// By end epoch; for the same end, finer ranges first.
-		slices.SortFunc(ci.Patches, func(a, b patchInfo) int {
+		slices.SortFunc(ci.Patches, func(a, b publication.Patch) int {
 			return cmp.Or(cmp.Compare(a.Range[1], b.Range[1]), cmp.Compare(b.Range[0], a.Range[0]))
 		})
 
@@ -472,5 +400,5 @@ func (s *Server) writeIndex(ctx context.Context) error {
 		return err
 	}
 
-	return s.pub.WriteFile("index.json", append(data, '\n'))
+	return s.pub.WriteFile(publication.IndexName, append(data, '\n'))
 }

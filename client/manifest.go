@@ -10,13 +10,11 @@ import (
 	"io"
 
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/publication"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 const (
-	// manifestFormat is the manifest format version this client reads.
-	manifestFormat = 1
-
 	// maxManifestSize bounds a decompressed manifest. A snapshot
 	// manifest lists every user in the channel at roughly 200 bytes
 	// each, so this allows for a few million users while stopping a
@@ -29,27 +27,16 @@ const (
 // for.
 type manifest struct {
 	// entries holds one entry per document in the archive, by user id.
-	entries map[string]manifestEntry
+	entries map[string]publication.ManifestEntry
 	// removed lists the users a patch removes from the channel.
 	removed []string
 }
-
-type manifestEntry struct {
-	ID       string `json:"id"`
-	Rev      int    `json:"rev"`
-	Hash     string `json:"hash"`
-	BaseRev  int    `json:"base_rev,omitempty"`
-	BaseHash string `json:"base_hash,omitempty"`
-	Part     int    `json:"part"`
-}
-
-func (e manifestEntry) isPatch() bool { return e.BaseHash != "" }
 
 // manifestWant is what a manifest must describe: the publication the
 // client asked for. A validly signed manifest for anything else is
 // rejected, so it can't be passed off as a different publication.
 type manifestWant struct {
-	kind     string // "snapshot" or "patch"
+	kind     string // publication.KindSnapshot or publication.KindPatch
 	serverID string
 	channel  string
 	epoch    int    // snapshots
@@ -93,7 +80,7 @@ func parseManifest(gz []byte, pin string, want manifestWant) (*manifest, error) 
 		return nil, &KeyChangedError{Pinned: pin, Got: got}
 	}
 
-	m := &manifest{entries: map[string]manifestEntry{}}
+	m := &manifest{entries: map[string]publication.ManifestEntry{}}
 	removed := map[string]bool{}
 	sawMeta := false
 
@@ -128,7 +115,7 @@ func parseManifest(gz []byte, pin string, want manifestWant) (*manifest, error) 
 			}
 
 		case probe.ID != nil:
-			var e manifestEntry
+			var e publication.ManifestEntry
 			if err := json.Unmarshal(line, &e); err != nil {
 				return nil, err
 			}
@@ -142,10 +129,10 @@ func parseManifest(gz []byte, pin string, want manifestWant) (*manifest, error) 
 
 		case probe.Removed != nil:
 			id := *probe.Removed
-			if want.kind != "patch" {
+			if want.kind != publication.KindPatch {
 				return nil, errors.New("snapshot manifest lists a removal")
 			}
-			if !isUserID(id) {
+			if !keys.ValidUserID(id) {
 				return nil, fmt.Errorf("manifest removes invalid user ID %q", id)
 			}
 			if removed[id] {
@@ -168,19 +155,12 @@ func parseManifest(gz []byte, pin string, want manifestWant) (*manifest, error) 
 }
 
 func checkManifestMeta(line []byte, want manifestWant) error {
-	var meta struct {
-		Manifest string  `json:"manifest"`
-		ServerID string  `json:"server_id"`
-		Channel  string  `json:"channel"`
-		Epoch    *int    `json:"epoch"`
-		Range    *[2]int `json:"range"`
-		Format   int     `json:"format"`
-	}
+	var meta publication.ManifestMeta
 	if err := json.Unmarshal(line, &meta); err != nil {
 		return err
 	}
 
-	if meta.Format != manifestFormat {
+	if meta.Format != publication.ManifestFormat {
 		return fmt.Errorf("unsupported manifest format %d", meta.Format)
 	}
 	if meta.Manifest != want.kind {
@@ -194,11 +174,11 @@ func checkManifestMeta(line []byte, want manifestWant) error {
 	}
 
 	switch want.kind {
-	case "snapshot":
+	case publication.KindSnapshot:
 		if meta.Epoch == nil || *meta.Epoch != want.epoch || meta.Range != nil {
 			return fmt.Errorf("manifest does not describe snapshot %d", want.epoch)
 		}
-	case "patch":
+	case publication.KindPatch:
 		if meta.Range == nil || *meta.Range != want.rng || meta.Epoch != nil {
 			return fmt.Errorf("manifest does not describe patch %d-%d", want.rng[0], want.rng[1])
 		}
@@ -207,8 +187,8 @@ func checkManifestMeta(line []byte, want manifestWant) error {
 	return nil
 }
 
-func checkManifestEntry(e manifestEntry, want manifestWant) error {
-	if !isUserID(e.ID) {
+func checkManifestEntry(e publication.ManifestEntry, want manifestWant) error {
+	if !keys.ValidUserID(e.ID) {
 		return fmt.Errorf("manifest entry has invalid user ID %q", e.ID)
 	}
 	if e.Rev < 1 || e.Hash == "" {
@@ -220,8 +200,8 @@ func checkManifestEntry(e manifestEntry, want manifestWant) error {
 	if (e.BaseRev == 0) != (e.BaseHash == "") {
 		return fmt.Errorf("manifest entry for user %s has a partial base", e.ID)
 	}
-	if e.isPatch() {
-		if want.kind != "patch" {
+	if e.IsPatch() {
+		if want.kind != publication.KindPatch {
 			return fmt.Errorf("snapshot manifest entry for user %s has a base", e.ID)
 		}
 		if e.BaseRev < 1 || e.BaseRev >= e.Rev {

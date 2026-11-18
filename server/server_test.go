@@ -19,6 +19,7 @@ import (
 
 	"github.com/openrevs/revs/domain"
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/publication"
 	"github.com/openrevs/revs/ratingset"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/assert"
@@ -152,7 +153,7 @@ func readArtifact(t *testing.T, ts *httptest.Server, channel, base string, parts
 // id, and removals.
 type testManifest struct {
 	meta    map[string]any
-	entries map[string]manifestEntry
+	entries map[string]publication.ManifestEntry
 	removed []string
 }
 
@@ -170,14 +171,14 @@ func readManifest(t *testing.T, s *Server, ts *httptest.Server, path string) tes
 	require.NoError(t, err)
 	require.Equal(t, keys.EncodePublic(s.key.Public().(ed25519.PublicKey)), keys.EncodePublic(doc.Info().SignerKey))
 
-	m := testManifest{entries: map[string]manifestEntry{}}
+	m := testManifest{entries: map[string]publication.ManifestEntry{}}
 	for _, line := range bytes.Split(bytes.TrimSpace(doc.JSON()), []byte("\n"))[1:] {
 		switch {
 		case gjson.GetBytes(line, "manifest").Exists():
 			require.Nil(t, m.meta, "multiple metadata lines")
 			require.NoError(t, json.Unmarshal(line, &m.meta))
 		case gjson.GetBytes(line, "id").Exists():
-			var e manifestEntry
+			var e publication.ManifestEntry
 			require.NoError(t, json.Unmarshal(line, &e))
 			m.entries[e.ID] = e
 		case gjson.GetBytes(line, "removed").Exists():
@@ -192,15 +193,15 @@ func readManifest(t *testing.T, s *Server, ts *httptest.Server, path string) tes
 	return m
 }
 
-func readIndex(t *testing.T, ts *httptest.Server) publicationIndex {
+func readIndex(t *testing.T, ts *httptest.Server) publication.Index {
 	t.Helper()
 
-	var idx publicationIndex
+	var idx publication.Index
 	require.NoError(t, json.Unmarshal(fetch(t, ts, "/v1/index.json"), &idx))
 	return idx
 }
 
-func patchRanges(ci *channelIndex) [][2]int {
+func patchRanges(ci *publication.Channel) [][2]int {
 	var rs [][2]int
 	for _, p := range ci.Patches {
 		rs = append(rs, p.Range)
@@ -308,7 +309,7 @@ func TestPublishingRoundTrip(t *testing.T) {
 	assert.Equal(t, 1.0, m.meta["format"])
 	_, err = time.Parse(time.RFC3339, m.meta["created"].(string))
 	require.NoError(t, err)
-	assert.Equal(t, map[string]manifestEntry{
+	assert.Equal(t, map[string]publication.ManifestEntry{
 		u1.ID: {ID: u1.ID, Rev: 1, Hash: hash1, Part: 1},
 		u2.ID: {ID: u2.ID, Rev: 1, Hash: hash2, Part: 1},
 	}, m.entries)
@@ -342,7 +343,7 @@ func TestPublishingRoundTrip(t *testing.T) {
 
 	// A patch entry's manifest line names its base.
 	m = readManifest(t, s, ts, "/v1/main/patch-manifest-1-2.sjsonl.gz")
-	assert.Equal(t, map[string]manifestEntry{
+	assert.Equal(t, map[string]publication.ManifestEntry{
 		u1.ID: {ID: u1.ID, Rev: 2, Hash: hash1b, BaseRev: 1, BaseHash: hash1, Part: 1},
 	}, m.entries)
 

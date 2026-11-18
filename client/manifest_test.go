@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/openrevs/revs/keys"
+	"github.com/openrevs/revs/publication"
 	jsonlines "github.com/openrevs/sjsonl-go"
 	"github.com/stretchr/testify/require"
 )
@@ -40,11 +41,11 @@ func TestParseManifest(t *testing.T) {
 	meta := fmt.Sprintf(`{"manifest":"patch","server_id":%q,"channel":"main","range":[3,5],"created":"2026-11-13T00:00:00Z","format":1}`, sid)
 	entry := fmt.Sprintf(`{"id":%q,"rev":4,"hash":"aa","base_rev":2,"base_hash":"bb","part":2}`, testUID)
 	removal := fmt.Sprintf(`{"removed":%q}`, uid2)
-	want := manifestWant{kind: "patch", serverID: sid, channel: "main", rng: [2]int{3, 5}, parts: 2}
+	want := manifestWant{kind: publication.KindPatch, serverID: sid, channel: "main", rng: [2]int{3, 5}, parts: 2}
 
 	m, err := parseManifest(signManifest(t, key, meta, entry, removal), pin, want)
 	require.NoError(t, err)
-	require.Equal(t, map[string]manifestEntry{
+	require.Equal(t, map[string]publication.ManifestEntry{
 		testUID: {ID: testUID, Rev: 4, Hash: "aa", BaseRev: 2, BaseHash: "bb", Part: 2},
 	}, m.entries)
 	require.Equal(t, []string{uid2}, m.removed)
@@ -56,7 +57,7 @@ func TestParseManifest(t *testing.T) {
 	var keyChanged *KeyChangedError
 	require.ErrorAs(t, err, &keyChanged)
 
-	snapWant := manifestWant{kind: "snapshot", serverID: sid, channel: "main", epoch: 5, parts: 2}
+	snapWant := manifestWant{kind: publication.KindSnapshot, serverID: sid, channel: "main", epoch: 5, parts: 2}
 	snapMeta := strings.Replace(strings.Replace(meta, `"patch"`, `"snapshot"`, 1), `"range":[3,5]`, `"epoch":5`, 1)
 	_, err = parseManifest(signManifest(t, key, snapMeta, strings.Replace(entry, `,"base_rev":2,"base_hash":"bb"`, "", 1)), pin, snapWant)
 	require.NoError(t, err)
@@ -68,9 +69,9 @@ func TestParseManifest(t *testing.T) {
 		"no metadata":         {[]string{entry}, want},
 		"two metadata lines":  {[]string{meta, strings.Replace(meta, "00:00:00", "00:00:01", 1)}, want},
 		"other kind":          {[]string{meta}, snapWant},
-		"other server":        {[]string{meta}, manifestWant{kind: "patch", serverID: testUID, channel: "main", rng: [2]int{3, 5}, parts: 2}},
-		"other channel":       {[]string{meta}, manifestWant{kind: "patch", serverID: sid, channel: "direct", rng: [2]int{3, 5}, parts: 2}},
-		"other range":         {[]string{meta}, manifestWant{kind: "patch", serverID: sid, channel: "main", rng: [2]int{4, 5}, parts: 2}},
+		"other server":        {[]string{meta}, manifestWant{kind: publication.KindPatch, serverID: testUID, channel: "main", rng: [2]int{3, 5}, parts: 2}},
+		"other channel":       {[]string{meta}, manifestWant{kind: publication.KindPatch, serverID: sid, channel: "direct", rng: [2]int{3, 5}, parts: 2}},
+		"other range":         {[]string{meta}, manifestWant{kind: publication.KindPatch, serverID: sid, channel: "main", rng: [2]int{4, 5}, parts: 2}},
 		"other format":        {[]string{strings.Replace(meta, `"format":1`, `"format":2`, 1)}, want},
 		"part out of range":   {[]string{meta, strings.Replace(entry, `"part":2`, `"part":3`, 1)}, want},
 		"partial base":        {[]string{meta, strings.Replace(entry, `"base_rev":2,`, "", 1)}, want},
@@ -126,7 +127,7 @@ func TestPlan(t *testing.T) {
 	// A held document is taken as is.
 	res := &Result{}
 	heads := map[string]Head{}
-	need, parts, err := c.plan(&manifest{entries: map[string]manifestEntry{uid: {ID: uid, Rev: 2, Hash: h2, BaseRev: 1, BaseHash: h1, Part: 1}}}, heads, res)
+	need, parts, err := c.plan(&manifest{entries: map[string]publication.ManifestEntry{uid: {ID: uid, Rev: 2, Hash: h2, BaseRev: 1, BaseHash: h1, Part: 1}}}, heads, res)
 	require.NoError(t, err)
 	require.Empty(t, need)
 	require.Empty(t, parts)
@@ -135,20 +136,20 @@ func TestPlan(t *testing.T) {
 
 	// A held blob must be the document the manifest says it is.
 	c.state.Heads = map[string]Head{}
-	_, _, err = c.plan(&manifest{entries: map[string]manifestEntry{uid: {ID: uid, Rev: 3, Hash: h2, Part: 1}}}, map[string]Head{}, res)
+	_, _, err = c.plan(&manifest{entries: map[string]publication.ManifestEntry{uid: {ID: uid, Rev: 3, Hash: h2, Part: 1}}}, map[string]Head{}, res)
 	require.ErrorContains(t, err, "isn't")
 	c.state.Heads = map[string]Head{uid: {Rev: 2, Hash: h2}}
 
 	// The same rev with a different document is an equivocation; the
 	// published document is still fetched.
-	need, parts, err = c.plan(&manifest{entries: map[string]manifestEntry{uid: {ID: uid, Rev: 2, Hash: h2b, BaseRev: 1, BaseHash: h1, Part: 2}}}, map[string]Head{}, res)
+	need, parts, err = c.plan(&manifest{entries: map[string]publication.ManifestEntry{uid: {ID: uid, Rev: 2, Hash: h2b, BaseRev: 1, BaseHash: h1, Part: 2}}}, map[string]Head{}, res)
 	require.NoError(t, err)
 	require.Contains(t, need, uid)
 	require.Equal(t, []int{2}, parts)
 	require.Equal(t, []Equivocation{{UserID: uid, Rev: 2, Held: h2, Published: h2b}}, res.Equivocations)
 
 	// A patch whose base isn't held is refused before any download.
-	_, _, err = c.plan(&manifest{entries: map[string]manifestEntry{uid: {ID: uid, Rev: 3, Hash: "cc", BaseRev: 2, BaseHash: "dd", Part: 1}}}, map[string]Head{}, res)
+	_, _, err = c.plan(&manifest{entries: map[string]publication.ManifestEntry{uid: {ID: uid, Rev: 3, Hash: "cc", BaseRev: 2, BaseHash: "dd", Part: 1}}}, map[string]Head{}, res)
 	var missing *missingBaseError
 	require.ErrorAs(t, err, &missing)
 }

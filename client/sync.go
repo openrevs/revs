@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/openrevs/revs/publication"
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
@@ -200,13 +201,19 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	return res, nil
 }
 
-func (c *Client) fetchIndex(ctx context.Context) (*publicationIndex, error) {
-	data, err := c.fetch(ctx, "/v1/index.json")
+// channelPath is the server path of name in the followed channel's
+// directory.
+func (c *Client) channelPath(name string) string {
+	return "/v1/" + c.channel + "/" + name
+}
+
+func (c *Client) fetchIndex(ctx context.Context) (*publication.Index, error) {
+	data, err := c.fetch(ctx, "/v1/"+publication.IndexName)
 	if err != nil {
 		return nil, err
 	}
 
-	var idx publicationIndex
+	var idx publication.Index
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, fmt.Errorf("client: index: %w", err)
 	}
@@ -214,20 +221,20 @@ func (c *Client) fetchIndex(ctx context.Context) (*publicationIndex, error) {
 	return &idx, nil
 }
 
-func newestSnapshot(ch *channelIndex) snapshotInfo {
-	return slices.MaxFunc(ch.Snapshots, func(a, b snapshotInfo) int { return cmp.Compare(a.Epoch, b.Epoch) })
+func newestSnapshot(ch *publication.Channel) publication.Snapshot {
+	return slices.MaxFunc(ch.Snapshots, func(a, b publication.Snapshot) int { return cmp.Compare(a.Epoch, b.Epoch) })
 }
 
 // patchesFrom returns the usable patches starting at epoch, largest
 // range first.
-func patchesFrom(ch *channelIndex, epoch int) []patchInfo {
-	var ps []patchInfo
+func patchesFrom(ch *publication.Channel, epoch int) []publication.Patch {
+	var ps []publication.Patch
 	for _, p := range ch.Patches {
 		if p.Range[0] == epoch && p.Range[1] > epoch && p.Range[1] <= ch.Epoch && p.Parts > 0 {
 			ps = append(ps, p)
 		}
 	}
-	slices.SortFunc(ps, func(a, b patchInfo) int { return cmp.Compare(b.Range[1], a.Range[1]) })
+	slices.SortFunc(ps, func(a, b publication.Patch) int { return cmp.Compare(b.Range[1], a.Range[1]) })
 	return ps
 }
 
@@ -253,7 +260,7 @@ func (e *missingBaseError) Error() string {
 // yields. A blob found by hash that isn't the current head is checked
 // to be that user's document at that rev, so a manifest can't pass off
 // one user's document as another's.
-func (c *Client) holds(e manifestEntry) (bool, error) {
+func (c *Client) holds(e publication.ManifestEntry) (bool, error) {
 	data, err := c.store.GetBlob(e.Hash)
 	if errors.Is(err, ErrBlobNotFound) {
 		return false, nil
@@ -272,7 +279,7 @@ func (c *Client) holds(e manifestEntry) (bool, error) {
 
 // noteEquivocation records a manifest entry that contradicts the
 // document held for the same user and rev.
-func (c *Client) noteEquivocation(e manifestEntry, res *Result) {
+func (c *Client) noteEquivocation(e publication.ManifestEntry, res *Result) {
 	if h, ok := c.state.Heads[e.ID]; ok && h.Rev == e.Rev && h.Hash != e.Hash {
 		res.Equivocations = append(res.Equivocations, Equivocation{UserID: e.ID, Rev: e.Rev, Held: h.Hash, Published: e.Hash})
 	}
@@ -282,8 +289,8 @@ func (c *Client) noteEquivocation(e manifestEntry, res *Result) {
 // it sets, and those to fetch, returned by user id along with the parts
 // that hold them. For patches it fails with a missingBaseError, before
 // anything is downloaded, if a needed entry's base isn't held.
-func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[string]manifestEntry, []int, error) {
-	need := map[string]manifestEntry{}
+func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[string]publication.ManifestEntry, []int, error) {
+	need := map[string]publication.ManifestEntry{}
 	parts := map[int]bool{}
 
 	for _, id := range slices.Sorted(maps.Keys(m.entries)) {
@@ -299,7 +306,7 @@ func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[stri
 			continue
 		}
 
-		if e.isPatch() {
+		if e.IsPatch() {
 			if _, err := c.store.GetBlob(e.BaseHash); errors.Is(err, ErrBlobNotFound) {
 				return nil, nil, &missingBaseError{userID: id, base: e.BaseHash}
 			} else if err != nil {
@@ -317,30 +324,30 @@ func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[stri
 // needed entry into a verified, stored document, setting its head.
 // Every entry must be listed in the manifest, in the part the manifest
 // says, and every needed entry must turn up.
-func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, need map[string]manifestEntry, parts []int, heads map[string]Head) error {
+func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, need map[string]publication.ManifestEntry, parts []int, heads map[string]Head) error {
 	got := map[string]bool{}
 
 	for _, part := range parts {
 		seen := map[string]bool{}
-		path := fmt.Sprintf("%s_%d.tar.gz", prefix, part)
+		path := publication.PartName(prefix, part)
 		err := c.fetchArchive(ctx, path, func(name string, r io.Reader) error {
-			en, err := parseEntryName(name)
+			en, err := publication.ParseEntryName(name)
 			if err != nil {
 				return err
 			}
-			if seen[en.userID] {
-				return fmt.Errorf("multiple entries for user %s", en.userID)
+			if seen[en.UserID] {
+				return fmt.Errorf("multiple entries for user %s", en.UserID)
 			}
-			seen[en.userID] = true
+			seen[en.UserID] = true
 
-			e, ok := m.entries[en.userID]
+			e, ok := m.entries[en.UserID]
 			if !ok {
 				return fmt.Errorf("entry %q is not in the manifest", name)
 			}
-			if e.Part != part || e.Rev != en.rev || e.isPatch() != en.isPatch || e.BaseRev != en.baseRev {
+			if e.Part != part || e.Rev != en.Rev || e.IsPatch() != en.IsPatch() || e.BaseRev != en.BaseRev {
 				return fmt.Errorf("entry %q does not match its manifest entry", name)
 			}
-			if _, ok := need[en.userID]; !ok {
+			if _, ok := need[en.UserID]; !ok {
 				return nil // already held
 			}
 
@@ -352,8 +359,8 @@ func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, n
 			if err != nil {
 				return err
 			}
-			heads[en.userID] = h
-			got[en.userID] = true
+			heads[en.UserID] = h
+			got[en.UserID] = true
 			return nil
 		})
 		if err != nil {
@@ -375,12 +382,12 @@ func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, n
 // downloaded (none, if the client holds everything). It changes state
 // (heads, epoch) only in memory and only once the whole patch applied;
 // the caller commits.
-func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, changed map[string]bool, res *Result) error {
+func (c *Client) applyPatch(ctx context.Context, pub publisher, p publication.Patch, changed map[string]bool, res *Result) error {
 	start, end := p.Range[0], p.Range[1]
-	prefix := fmt.Sprintf("/v1/%s/patch-%d-%d", c.channel, start, end)
+	prefix := c.channelPath(publication.PatchBase(start, end))
 
-	m, err := c.fetchManifest(ctx, fmt.Sprintf("/v1/%s/patch-manifest-%d-%d.sjsonl.gz", c.channel, start, end), pub.pin,
-		manifestWant{kind: "patch", serverID: pub.serverID, channel: c.channel, rng: p.Range, parts: p.Parts})
+	m, err := c.fetchManifest(ctx, c.channelPath(publication.PatchManifestName(start, end)), pub.pin,
+		manifestWant{kind: publication.KindPatch, serverID: pub.serverID, channel: c.channel, rng: p.Range, parts: p.Parts})
 	if err != nil {
 		return err
 	}
@@ -422,7 +429,7 @@ func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, cha
 // full docs stand alone, sjsonl patches apply to the base they name,
 // which may be any document the store holds. The result must be the
 // document the manifest entry e lists.
-func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, error) {
+func (c *Client) applyEntry(en publication.EntryName, e publication.ManifestEntry, data []byte) (Head, error) {
 	ctl, err := peekControl(data)
 	if err != nil {
 		return Head{}, err
@@ -430,45 +437,45 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 
 	var h Head
 	switch {
-	case ctl.SJSONL == "doc" && !en.isPatch:
+	case ctl.SJSONL == "doc" && !en.IsPatch():
 		h, err = c.ingestDoc(en, data)
 		if err != nil {
 			return Head{}, err
 		}
 
-	case ctl.SJSONL == "patch" && en.isPatch:
+	case ctl.SJSONL == "patch" && en.IsPatch():
 		if ctl.Base != e.BaseHash {
-			return Head{}, fmt.Errorf("client: patch for user %s applies to %s, manifest says %s", en.userID, ctl.Base, e.BaseHash)
+			return Head{}, fmt.Errorf("client: patch for user %s applies to %s, manifest says %s", en.UserID, ctl.Base, e.BaseHash)
 		}
 		base, err := c.store.GetBlob(ctl.Base)
 		if errors.Is(err, ErrBlobNotFound) {
-			return Head{}, &missingBaseError{userID: en.userID, base: ctl.Base}
+			return Head{}, &missingBaseError{userID: en.UserID, base: ctl.Base}
 		}
 		if err != nil {
 			return Head{}, fmt.Errorf("client: loading base document %s: %w", ctl.Base, err)
 		}
-		if id, rev, err := docIdentity(base); err != nil || id != en.userID || rev != en.baseRev {
+		if id, rev, err := docIdentity(base); err != nil || id != en.UserID || rev != en.BaseRev {
 			return Head{}, fmt.Errorf("client: patch for user %s rev %d applies to a document that isn't that revision",
-				en.userID, en.baseRev)
+				en.UserID, en.BaseRev)
 		}
 		doc, _, err := jsonlines.Patch(base, data)
 		if err != nil {
-			return Head{}, fmt.Errorf("client: applying patch for user %s: %w", en.userID, err)
+			return Head{}, fmt.Errorf("client: applying patch for user %s: %w", en.UserID, err)
 		}
 		h, err = c.ingestDoc(en, doc)
 		if err != nil {
 			return Head{}, err
 		}
 		if ctl.Target != "" && ctl.Target != h.Hash {
-			return Head{}, fmt.Errorf("client: patch for user %s yields %s, header says %s", en.userID, h.Hash, ctl.Target)
+			return Head{}, fmt.Errorf("client: patch for user %s yields %s, header says %s", en.UserID, h.Hash, ctl.Target)
 		}
 
 	default:
-		return Head{}, fmt.Errorf("client: entry for user %s is an sjsonl %q, but its name says otherwise", en.userID, ctl.SJSONL)
+		return Head{}, fmt.Errorf("client: entry for user %s is an sjsonl %q, but its name says otherwise", en.UserID, ctl.SJSONL)
 	}
 
 	if h.Hash != e.Hash {
-		return Head{}, fmt.Errorf("client: entry for user %s yields %s, manifest says %s", en.userID, h.Hash, e.Hash)
+		return Head{}, fmt.Errorf("client: entry for user %s yields %s, manifest says %s", en.UserID, h.Hash, e.Hash)
 	}
 	return h, nil
 }
@@ -478,14 +485,14 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 // the user id and revision in the entry name must match the contents.
 // (sjsonl's Patch does not verify the result's signature itself, so
 // re-parsing here is what makes patched documents trustworthy.)
-func (c *Client) ingestDoc(en entryName, data []byte) (Head, error) {
+func (c *Client) ingestDoc(en publication.EntryName, data []byte) (Head, error) {
 	doc, err := verifyDoc(data)
 	if err != nil {
-		return Head{}, fmt.Errorf("client: document for user %s: %w", en.userID, err)
+		return Head{}, fmt.Errorf("client: document for user %s: %w", en.UserID, err)
 	}
-	if doc.userID != en.userID || doc.rev != en.rev {
+	if doc.userID != en.UserID || doc.rev != en.Rev {
 		return Head{}, fmt.Errorf("client: entry named for user %s rev %d holds user %s rev %d",
-			en.userID, en.rev, doc.userID, doc.rev)
+			en.UserID, en.Rev, doc.userID, doc.rev)
 	}
 
 	if err := c.store.PutBlob(doc.hash, doc.data); err != nil {
@@ -499,9 +506,9 @@ func (c *Client) ingestDoc(en entryName, data []byte) (Head, error) {
 // manifest lists every document in the channel at that epoch; only the
 // parts holding documents the store lacks are downloaded, which is also
 // how a snapshot repairs a corpus missing a document.
-func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap snapshotInfo, changed map[string]bool, res *Result) error {
-	m, err := c.fetchManifest(ctx, fmt.Sprintf("/v1/%s/snapshot-manifest-%d.sjsonl.gz", c.channel, snap.Epoch), pub.pin,
-		manifestWant{kind: "snapshot", serverID: pub.serverID, channel: c.channel, epoch: snap.Epoch, parts: snap.Parts})
+func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap publication.Snapshot, changed map[string]bool, res *Result) error {
+	m, err := c.fetchManifest(ctx, c.channelPath(publication.SnapshotManifestName(snap.Epoch)), pub.pin,
+		manifestWant{kind: publication.KindSnapshot, serverID: pub.serverID, channel: c.channel, epoch: snap.Epoch, parts: snap.Parts})
 	if err != nil {
 		return err
 	}
@@ -511,7 +518,7 @@ func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap snapshotI
 	if err != nil {
 		return err
 	}
-	prefix := fmt.Sprintf("/v1/%s/snapshot-%d", c.channel, snap.Epoch)
+	prefix := c.channelPath(publication.SnapshotBase(snap.Epoch))
 	if err := c.fetchEntries(ctx, prefix, m, need, parts, heads); err != nil {
 		return err
 	}

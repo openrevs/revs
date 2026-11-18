@@ -114,10 +114,6 @@ func (s *Server) acceptDocument(ctx context.Context, body []byte, latest *domain
 		return status, resp, userID, rev
 	}
 
-	if rev < 1 {
-		return verdict(http.StatusBadRequest, uploadResponse{Status: "invalid", Reason: "revision must be at least 1"})
-	}
-
 	if latest == nil {
 		latest, err = s.dal.LatestDocument(ctx, userID)
 		if err != nil {

@@ -32,8 +32,9 @@ var forbidden = map[string][]string{
 	// package itself, to pull from upstream servers.)
 	"server": {"collection", "ui", "tui", "revstest"},
 	// Shared formats sit below everything else.
-	"ratingset": {"client", "collection", "server", "ui", "tui", "revstest", "domain", "sqlc"},
-	"keys":      {"client", "collection", "server", "ratingset", "ui", "tui", "revstest", "domain", "sqlc"},
+	"publication": {"client", "collection", "server", "ratingset", "ui", "tui", "revstest", "domain", "sqlc"},
+	"ratingset":   {"client", "collection", "server", "ui", "tui", "revstest", "domain", "sqlc"},
+	"keys":        {"client", "collection", "server", "ratingset", "ui", "tui", "revstest", "domain", "sqlc"},
 }
 
 func TestLayering(t *testing.T) {

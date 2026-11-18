@@ -20,6 +20,20 @@ func UserID(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(h[:])
 }
 
+// ValidUserID reports whether s is a well-formed user ID: 64
+// lowercase hex characters.
+func ValidUserID(s string) bool {
+	if len(s) != 2*sha256.Size {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // EncodePublic returns the base64 encoding of a public key.
 func EncodePublic(pub ed25519.PublicKey) string {
 	return base64.StdEncoding.EncodeToString(pub)

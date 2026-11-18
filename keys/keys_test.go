@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,4 +59,20 @@ func TestParseRejects(t *testing.T) {
 
 	_, err := ParsePublic(hex.EncodeToString(testKey.Public().(ed25519.PublicKey)))
 	assert.Error(t, err)
+}
+
+func TestValidUserID(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := UserID(pub)
+	if !ValidUserID(id) {
+		t.Errorf("derived id %q is not valid", id)
+	}
+	for _, bad := range []string{"", "abc", id[:63], id + "0", strings.ToUpper(id), id[:63] + "g"} {
+		if ValidUserID(bad) {
+			t.Errorf("ValidUserID(%q) = true", bad)
+		}
+	}
 }

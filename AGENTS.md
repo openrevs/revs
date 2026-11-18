@@ -26,6 +26,9 @@ API, not in `cmd/revs`.
 
 - `ratingset`, `keys`: the document format and identities, shared by
   both halves. They depend on nothing else in the module.
+- `publication`: the publication format (index, manifest lines, file
+  and archive entry names), shared by the server that writes it and
+  the client that reads it. It depends only on `keys` and does no I/O.
 - `server`: the publishing server. `server.Open` or `server.New` builds
   one; mount `Handler` and call `Run`, or call `ListenAndServe`.
 - `client` (and `client/sqlitestore`, `client/fsstore`): the sync

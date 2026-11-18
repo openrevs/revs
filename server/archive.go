@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"path"
 	"time"
+
+	"github.com/openrevs/revs/publication"
 )
 
 // archiveWriter writes a publication archive (a snapshot or a patch) as
@@ -129,5 +131,5 @@ func (w *archiveWriter) closePart() error {
 		return err
 	}
 
-	return w.pub.WriteFile(path.Join(w.dir, fmt.Sprintf("%s_%d.tar.gz", w.base, w.parts)), buf.Bytes())
+	return w.pub.WriteFile(path.Join(w.dir, publication.PartName(w.base, w.parts)), buf.Bytes())
 }
