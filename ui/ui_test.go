@@ -421,6 +421,9 @@ func TestImportCSV(t *testing.T) {
 		"title\n":                                               "no rows after the header",
 		"title,imdb_id,imdb_id_no_tt\nHeat,tt0113277,0113278\n": "line 2: imdb_id_no_tt &#34;0113278&#34; doesn&#39;t match imdb_id &#34;tt0113277&#34;",
 		"title,imdb_id_no_tt\nHeat,tt0113277\n":                 "line 2: imdb_id_no_tt &#34;tt0113277&#34; should be digits like 0110912",
+		"title,type\nHeat,book\n":                               `line 2: type &#34;book&#34; should be`,
+		"title,season\nHeat,1\n":                                "line 2: only a TV series",
+		"title,type,episode\nFargo,tv,2\n":                      "line 2: an episode needs a season",
 	} {
 		_, msg = u.uploadTo("/import/csv", []byte(file))
 		require.Contains(t, msg, "Could not read that CSV file", file)
@@ -429,6 +432,32 @@ func TestImportCSV(t *testing.T) {
 	counts, err := u.app.c.Counts(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 6, counts.Movies, "a rejected file imports nothing")
+	require.EqualValues(t, 0, counts.Series)
+
+	// type tv makes a row a TV series; season and episode give its
+	// viewing's part, and a season alone records a viewing.
+	file = "title,type,year,tmdb_id,season,episode,rating\n" +
+		"Fargo,tv,2014,https://www.themoviedb.org/tv/60622,1,,4.5\n" +
+		"Fargo,TV,2014,,2,3,\n" +
+		"Fargo,tv,2014,,,,4\n" +
+		"Fargo,,1996,,,,5\n"
+	_, msg = u.uploadTo("/import/csv", []byte(file))
+	require.Contains(t, msg, "Imported 2 new titles (2 already present) and 4 new viewings (0 already present)")
+	series, err := u.app.c.Movies(ctx, "fargo", collection.TypeTV)
+	require.NoError(t, err)
+	require.Len(t, series, 1)
+	require.Equal(t, "60622", *series[0].TmdbID)
+	require.Equal(t, int64(8), series[0].LatestRating, "the whole-series viewing's")
+	vs, err = u.app.c.Viewings(ctx, series[0].ID)
+	require.NoError(t, err)
+	var parts []string
+	for _, v := range vs {
+		parts = append(parts, collection.PartName(v.Season, v.Episode))
+	}
+	require.ElementsMatch(t, []string{"Season 1", "S2 E3", ""}, parts)
+	films, err := u.app.c.Movies(ctx, "fargo", collection.TypeMovie)
+	require.NoError(t, err)
+	require.Len(t, films, 1, "the 1996 film is a separate movie")
 }
 
 func (u *testUI) upload(data []byte) (string, string) {
