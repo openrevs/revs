@@ -1,14 +1,18 @@
 {{define "content"}}{{with .Data}}
 <div class="heading">
-  <h1>Movies</h1>
-  <a class="button primary" href="/movies/new">Add a movie</a>
+  <h1>Movies &amp; TV</h1>
+  <a class="button primary" href="/movies/new">Add a movie or series</a>
 </div>
 <form class="search" method="get" action="/movies">
-  <input type="search" name="q" value="{{.Query}}" placeholder="Search your movies" autofocus>
+  <input type="search" name="q" value="{{.Query}}" placeholder="Search your collection" autofocus>
+  {{with .Type}}<input type="hidden" name="type" value="{{.}}">{{end}}
   <button type="submit">Search</button>
-  {{if .Query}}<a href="/movies">Clear</a>{{end}}
+  {{if .Query}}<a href="/movies{{with .Type}}?type={{.}}{{end}}">Clear</a>{{end}}
 </form>
-<p class="muted">{{.Counts.Movies}} movies{{if ne .Counts.Movies .Counts.Viewings}}, {{.Counts.Viewings}} viewings{{end}}.</p>
+<p class="filters small">
+  {{range .Filters}}{{if eq .Type $.Data.Type}}<strong>{{.Label}}</strong>{{else}}<a href="/movies?{{with .Type}}type={{.}}&amp;{{end}}q={{$.Data.Query}}">{{.Label}}</a>{{end}} {{end}}
+</p>
+<p class="muted">{{.Counts.Movies}} movies, {{.Counts.Series}} TV series{{if .Counts.Viewings}}, {{.Counts.Viewings}} viewings{{end}}.</p>
 {{if .Movies}}
 <table class="list">
   <thead><tr><th>Title</th><th>Year</th><th>Rating</th><th>Watched</th></tr></thead>
@@ -17,17 +21,19 @@
   </tbody>
 </table>
 {{else if .Query}}
-<p>No movies match “{{.Query}}”. <a href="/movies/new?q={{.Query}}">Add it?</a></p>
+<p>Nothing matches “{{.Query}}”. <a href="/movies/new?q={{.Query}}">Add it?</a></p>
+{{else if .Type}}
+<p>No {{if eq .Type "tv"}}TV series{{else}}movies{{end}} yet. <a href="/movies/new">Add one</a>.</p>
 {{else}}
-<p>Your collection is empty. <a href="/movies/new">Add a movie</a>, or <a href="/data">import</a> an existing ratings file.</p>
+<p>Your collection is empty. <a href="/movies/new">Add a movie or series</a>, or <a href="/data">import</a> an existing ratings file.</p>
 {{end}}
 {{end}}{{end}}
 
-{{/* One movie in the list: takes M (a row) and Next. Rating it patches
-     the row. */}}
+{{/* One movie or series in the list: takes M (a row) and Next. Rating
+     it patches the row. A series's rating is of the whole series. */}}
 {{define "movie-row"}}{{with .M}}
   <tr id="movie-{{.ID}}">
-    <td><a href="/movies/{{.ID}}">{{.Title}}</a></td>
+    <td><a href="/movies/{{.ID}}">{{.Title}}</a>{{if eq .Type "tv"}} <span class="tag">TV</span>{{end}}</td>
     <td>{{with .Year}}{{.}}{{end}}</td>
     <td>{{template "rate" (dict "Action" (printf "/movies/%d/rating" .ID) "Rating" .LatestRating "Next" $.Next "View" "row")}}</td>
     <td class="date">{{.LastViewed}}{{if gt .ViewingCount 1}} <span class="muted" title="{{.ViewingCount}} viewings">×{{.ViewingCount}}</span>{{end}}</td>

@@ -10,7 +10,7 @@ import (
 )
 
 const allMovies = `-- name: AllMovies :many
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies ORDER BY title COLLATE NOCASE, year, id
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies ORDER BY title COLLATE NOCASE, year, id
 `
 
 func (q *Queries) AllMovies(ctx context.Context) ([]Movie, error) {
@@ -31,6 +31,7 @@ func (q *Queries) AllMovies(ctx context.Context) ([]Movie, error) {
 			&i.WikidataID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Type,
 		); err != nil {
 			return nil, err
 		}
@@ -46,12 +47,13 @@ func (q *Queries) AllMovies(ctx context.Context) ([]Movie, error) {
 }
 
 const createMovie = `-- name: CreateMovie :one
-INSERT INTO movies (title, year, imdb_id, tmdb_id, wikidata_id)
-VALUES (?, ?, ?, ?, ?)
-RETURNING id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at
+INSERT INTO movies (type, title, year, imdb_id, tmdb_id, wikidata_id)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type
 `
 
 type CreateMovieParams struct {
+	Type       string
 	Title      string
 	Year       *int64
 	ImdbID     *string
@@ -61,6 +63,7 @@ type CreateMovieParams struct {
 
 func (q *Queries) CreateMovie(ctx context.Context, arg CreateMovieParams) (Movie, error) {
 	row := q.db.QueryRowContext(ctx, createMovie,
+		arg.Type,
 		arg.Title,
 		arg.Year,
 		arg.ImdbID,
@@ -77,6 +80,7 @@ func (q *Queries) CreateMovie(ctx context.Context, arg CreateMovieParams) (Movie
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
@@ -91,11 +95,16 @@ func (q *Queries) DeleteMovie(ctx context.Context, id int64) error {
 }
 
 const findMovieByIMDB = `-- name: FindMovieByIMDB :one
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies WHERE imdb_id = ? LIMIT 1
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies WHERE type = ? AND imdb_id = ? LIMIT 1
 `
 
-func (q *Queries) FindMovieByIMDB(ctx context.Context, imdbID *string) (Movie, error) {
-	row := q.db.QueryRowContext(ctx, findMovieByIMDB, imdbID)
+type FindMovieByIMDBParams struct {
+	Type   string
+	ImdbID *string
+}
+
+func (q *Queries) FindMovieByIMDB(ctx context.Context, arg FindMovieByIMDBParams) (Movie, error) {
+	row := q.db.QueryRowContext(ctx, findMovieByIMDB, arg.Type, arg.ImdbID)
 	var i Movie
 	err := row.Scan(
 		&i.ID,
@@ -106,16 +115,22 @@ func (q *Queries) FindMovieByIMDB(ctx context.Context, imdbID *string) (Movie, e
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
 
 const findMovieByTMDB = `-- name: FindMovieByTMDB :one
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies WHERE tmdb_id = ? LIMIT 1
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies WHERE type = ? AND tmdb_id = ? LIMIT 1
 `
 
-func (q *Queries) FindMovieByTMDB(ctx context.Context, tmdbID *string) (Movie, error) {
-	row := q.db.QueryRowContext(ctx, findMovieByTMDB, tmdbID)
+type FindMovieByTMDBParams struct {
+	Type   string
+	TmdbID *string
+}
+
+func (q *Queries) FindMovieByTMDB(ctx context.Context, arg FindMovieByTMDBParams) (Movie, error) {
+	row := q.db.QueryRowContext(ctx, findMovieByTMDB, arg.Type, arg.TmdbID)
 	var i Movie
 	err := row.Scan(
 		&i.ID,
@@ -126,23 +141,25 @@ func (q *Queries) FindMovieByTMDB(ctx context.Context, tmdbID *string) (Movie, e
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
 
 const findMovieByTitleYear = `-- name: FindMovieByTitleYear :one
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies
-WHERE title = ?1 COLLATE NOCASE AND year IS ?2
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies
+WHERE type = ?1 AND title = ?2 COLLATE NOCASE AND year IS ?3
 LIMIT 1
 `
 
 type FindMovieByTitleYearParams struct {
+	Type  string
 	Title string
 	Year  *int64
 }
 
 func (q *Queries) FindMovieByTitleYear(ctx context.Context, arg FindMovieByTitleYearParams) (Movie, error) {
-	row := q.db.QueryRowContext(ctx, findMovieByTitleYear, arg.Title, arg.Year)
+	row := q.db.QueryRowContext(ctx, findMovieByTitleYear, arg.Type, arg.Title, arg.Year)
 	var i Movie
 	err := row.Scan(
 		&i.ID,
@@ -153,16 +170,22 @@ func (q *Queries) FindMovieByTitleYear(ctx context.Context, arg FindMovieByTitle
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
 
 const findMovieByWikidata = `-- name: FindMovieByWikidata :one
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies WHERE wikidata_id = ? LIMIT 1
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies WHERE type = ? AND wikidata_id = ? LIMIT 1
 `
 
-func (q *Queries) FindMovieByWikidata(ctx context.Context, wikidataID *string) (Movie, error) {
-	row := q.db.QueryRowContext(ctx, findMovieByWikidata, wikidataID)
+type FindMovieByWikidataParams struct {
+	Type       string
+	WikidataID *string
+}
+
+func (q *Queries) FindMovieByWikidata(ctx context.Context, arg FindMovieByWikidataParams) (Movie, error) {
+	row := q.db.QueryRowContext(ctx, findMovieByWikidata, arg.Type, arg.WikidataID)
 	var i Movie
 	err := row.Scan(
 		&i.ID,
@@ -173,12 +196,13 @@ func (q *Queries) FindMovieByWikidata(ctx context.Context, wikidataID *string) (
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
 
 const getMovie = `-- name: GetMovie :one
-SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at FROM movies WHERE id = ?
+SELECT id, title, year, imdb_id, tmdb_id, wikidata_id, created_at, updated_at, type FROM movies WHERE id = ?
 `
 
 func (q *Queries) GetMovie(ctx context.Context, id int64) (Movie, error) {
@@ -193,25 +217,32 @@ func (q *Queries) GetMovie(ctx context.Context, id int64) (Movie, error) {
 		&i.WikidataID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Type,
 	)
 	return i, err
 }
 
 const listMovies = `-- name: ListMovies :many
-SELECT m.id, m.title, m.year, m.imdb_id, m.tmdb_id, m.wikidata_id,
+SELECT m.id, m.title, m.year, m.imdb_id, m.tmdb_id, m.wikidata_id, m.type,
        CAST(COUNT(v.id) AS INTEGER) AS viewing_count,
        CAST(COALESCE(MAX(v.viewed_on), '') AS TEXT) AS last_viewed,
        -- -1 when there is no viewing or the latest one is unrated.
        CAST(COALESCE((SELECT v2.rating FROM viewings v2
-             WHERE v2.movie_id = m.id
+             WHERE v2.movie_id = m.id AND v2.season IS NULL
              ORDER BY v2.viewed_on IS NULL, v2.viewed_on DESC, v2.id DESC
              LIMIT 1), -1) AS INTEGER) AS latest_rating
 FROM movies m
 LEFT JOIN viewings v ON v.movie_id = m.id
-WHERE CAST(?1 AS TEXT) = '' OR m.title LIKE '%' || CAST(?1 AS TEXT) || '%'
+WHERE (CAST(?1 AS TEXT) = '' OR m.title LIKE '%' || CAST(?1 AS TEXT) || '%')
+  AND (CAST(?2 AS TEXT) = '' OR m.type = CAST(?2 AS TEXT))
 GROUP BY m.id
 ORDER BY m.title COLLATE NOCASE, m.year
 `
+
+type ListMoviesParams struct {
+	Query string
+	Type  string
+}
 
 type ListMoviesRow struct {
 	ID           int64
@@ -220,13 +251,17 @@ type ListMoviesRow struct {
 	ImdbID       *string
 	TmdbID       *string
 	WikidataID   *string
+	Type         string
 	ViewingCount int64
 	LastViewed   string
 	LatestRating int64
 }
 
-func (q *Queries) ListMovies(ctx context.Context, query string) ([]ListMoviesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listMovies, query)
+// Items whose title contains query (all when empty), of the given type
+// (all when empty). latest_rating is the item's rating: that of its
+// newest viewing about the whole item (not a season or episode).
+func (q *Queries) ListMovies(ctx context.Context, arg ListMoviesParams) ([]ListMoviesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMovies, arg.Query, arg.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +276,7 @@ func (q *Queries) ListMovies(ctx context.Context, query string) ([]ListMoviesRow
 			&i.ImdbID,
 			&i.TmdbID,
 			&i.WikidataID,
+			&i.Type,
 			&i.ViewingCount,
 			&i.LastViewed,
 			&i.LatestRating,
@@ -260,12 +296,13 @@ func (q *Queries) ListMovies(ctx context.Context, query string) ([]ListMoviesRow
 
 const updateMovie = `-- name: UpdateMovie :exec
 UPDATE movies
-SET title = ?, year = ?, imdb_id = ?, tmdb_id = ?, wikidata_id = ?,
+SET type = ?, title = ?, year = ?, imdb_id = ?, tmdb_id = ?, wikidata_id = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 `
 
 type UpdateMovieParams struct {
+	Type       string
 	Title      string
 	Year       *int64
 	ImdbID     *string
@@ -276,6 +313,7 @@ type UpdateMovieParams struct {
 
 func (q *Queries) UpdateMovie(ctx context.Context, arg UpdateMovieParams) error {
 	_, err := q.db.ExecContext(ctx, updateMovie,
+		arg.Type,
 		arg.Title,
 		arg.Year,
 		arg.ImdbID,

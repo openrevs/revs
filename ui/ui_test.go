@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openrevs/revs/collection"
 	"github.com/openrevs/revs/ratingset"
 	"github.com/openrevs/revs/revstest"
 	jsonlines "github.com/openrevs/sjsonl-go"
@@ -213,13 +215,13 @@ func TestPushPull(t *testing.T) {
 	alice2.post("/servers", url.Values{"url": {sts.URL}})
 	alice2.post("/movies", url.Values{"title": {"Aliens"}, "year": {"1986"}})
 	_, msg = alice2.post("/servers/1/push", nil)
-	require.Contains(t, msg, "Merged your collection from the server (revision 1) first. Imported 1 new movies")
+	require.Contains(t, msg, "Merged your collection from the server (revision 1) first. Imported 1 new titles")
 	require.Contains(t, msg, "Pushed revision 2")
 
 	sts.Cut()
 	alice.post("/servers/1/pull", nil)
 	_, msg = alice.post("/servers/1/import-mine", nil)
-	require.Contains(t, msg, "Imported 1 new movies (1 already present)")
+	require.Contains(t, msg, "Imported 1 new titles (1 already present)")
 
 	// A copy the server hasn't published yet can't be merged: pushing
 	// again stays a conflict until it is, or until pushed anyway.
@@ -289,14 +291,14 @@ func TestExportImport(t *testing.T) {
 	// Importing into a fresh collection reproduces it.
 	other := newTestUI(t)
 	_, msg := other.upload(doc)
-	require.Contains(t, msg, "Imported 2 new movies (0 already present) and 1 new viewings")
+	require.Contains(t, msg, "Imported 2 new titles (0 already present) and 1 new viewings")
 	all, err := other.app.c.AllMovies(ctx)
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 
 	// Re-importing changes nothing.
 	_, msg = other.upload(doc)
-	require.Contains(t, msg, "Imported 0 new movies (2 already present) and 0 new viewings (1 already present)")
+	require.Contains(t, msg, "Imported 0 new titles (2 already present) and 0 new viewings (1 already present)")
 
 	// A tampered document is rejected.
 	_, msg = other.upload(bytes.Replace(doc, []byte("Brazil"), []byte("Brasil"), 1))
@@ -322,8 +324,8 @@ func TestImportUnsignedDraft(t *testing.T) {
 	}, "\n")
 
 	_, msg := u.upload([]byte(draft))
-	require.Contains(t, msg, "Imported 1 new movies (0 already present) and 2 new viewings")
-	require.Contains(t, msg, "Skipped 1 non-movie titles")
+	require.Contains(t, msg, "Imported 1 new titles (0 already present) and 2 new viewings")
+	require.Contains(t, msg, "Skipped 1 titles that are neither movies nor TV series")
 	require.Contains(t, msg, "Skipped 4 invalid titles")
 
 	m, err := u.app.c.Movie(ctx, 1)
@@ -336,7 +338,7 @@ func TestImportUnsignedDraft(t *testing.T) {
 
 	// A later import matching by id fills in missing ids.
 	_, msg = u.upload([]byte(`{"refs":{"imdb":"tt0110912","wikidata":"Q104123"},"title":"Pulp Fiction (1994)","type":"movie"}`))
-	require.Contains(t, msg, "0 new movies (1 already present)")
+	require.Contains(t, msg, "0 new titles (1 already present)")
 	m, err = u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, "Q104123", *m.WikidataID)
@@ -345,7 +347,7 @@ func TestImportUnsignedDraft(t *testing.T) {
 	// Items whose refs conflict (a shared key with a different value)
 	// are kept apart, even when another ref or the title and year agree.
 	_, msg = u.upload([]byte(`{"refs":{"imdb":"tt0110912","tmdb":"999"},"title":"Pulp Fiction","type":"movie","year":1994}`))
-	require.Contains(t, msg, "1 new movies (0 already present)")
+	require.Contains(t, msg, "1 new titles (0 already present)")
 }
 
 func TestImportCSV(t *testing.T) {
@@ -360,7 +362,7 @@ func TestImportCSV(t *testing.T) {
 		`,"Crouching Tiger, Hidden Dragon",2000,,,,` + "\n" +
 		",Heat,,3,,,\n"
 	_, msg := u.uploadTo("/import/csv", []byte(file))
-	require.Contains(t, msg, "Imported 3 new movies (1 already present) and 3 new viewings (0 already present)")
+	require.Contains(t, msg, "Imported 3 new titles (1 already present) and 3 new viewings (0 already present)")
 
 	m, err := u.app.c.Movie(ctx, 1)
 	require.NoError(t, err)
@@ -377,12 +379,12 @@ func TestImportCSV(t *testing.T) {
 
 	// Re-importing changes nothing.
 	_, msg = u.uploadTo("/import/csv", []byte(file))
-	require.Contains(t, msg, "Imported 0 new movies (4 already present) and 0 new viewings (3 already present)")
+	require.Contains(t, msg, "Imported 0 new titles (4 already present) and 0 new viewings (3 already present)")
 
 	// imdb_id_no_tt supplies the id without "tt", alone or agreeing
 	// with imdb_id.
 	_, msg = u.uploadTo("/import/csv", []byte("title,imdb_id_no_tt,imdb_id\nThe Thing,0084787,\nHeat,0113277,tt0113277\n"))
-	require.Contains(t, msg, "Imported 1 new movies (1 already present)")
+	require.Contains(t, msg, "Imported 1 new titles (1 already present)")
 	m, err = u.app.c.Movie(ctx, 4)
 	require.NoError(t, err)
 	require.Equal(t, "The Thing", m.Title)
@@ -393,7 +395,7 @@ func TestImportCSV(t *testing.T) {
 
 	// Title-only files work.
 	_, msg = u.uploadTo("/import/csv", []byte("title\nAlien\n"))
-	require.Contains(t, msg, "Imported 1 new movies")
+	require.Contains(t, msg, "Imported 1 new titles")
 
 	// review is free text: quoted fields may hold commas, doubled
 	// quotes, and line breaks (LF or CRLF), and a review alone adds a
@@ -402,7 +404,7 @@ func TestImportCSV(t *testing.T) {
 		"Brazil,\"Odd, \"\"funny\"\",\r\nand long.\n\nSee it.\",4\r\n" +
 		"Brazil,  Second look  ,\r\n"
 	_, msg = u.uploadTo("/import/csv", []byte(file))
-	require.Contains(t, msg, "Imported 1 new movies (1 already present) and 2 new viewings (0 already present)")
+	require.Contains(t, msg, "Imported 1 new titles (1 already present) and 2 new viewings (0 already present)")
 	vs, err = u.app.c.Viewings(ctx, 6)
 	require.NoError(t, err)
 	require.Len(t, vs, 2)
@@ -672,4 +674,77 @@ func TestInlineViewings(t *testing.T) {
 
 	// Without JavaScript the old edit page still works.
 	require.Contains(t, u.get("/viewings/2/edit"), "Edit viewing")
+}
+
+// A TV series is added like a movie, with type tv; its viewings may
+// name a season and episode, and its rating is of the whole series.
+func TestTVSeries(t *testing.T) {
+	u := newTestUI(t)
+	ctx := context.Background()
+
+	loc, msg := u.post("/movies", url.Values{
+		"type": {"tv"}, "title": {"Fargo"}, "year": {"2014"},
+		"tmdb_id": {"https://www.themoviedb.org/tv/60622-fargo"},
+	})
+	require.Equal(t, "/movies/1", loc)
+	require.Contains(t, msg, "Added Fargo")
+	m, err := u.app.c.Movie(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, collection.TypeTV, m.Type)
+	require.Equal(t, "60622", *m.TmdbID)
+
+	// A movie TMDB URL doesn't name a series.
+	loc, _ = u.post("/movies", url.Values{"type": {"tv"}, "title": {"Fargo"}, "tmdb_id": {"https://www.themoviedb.org/movie/275"}})
+	require.Empty(t, loc, "re-renders the form")
+	u.post("/movies", url.Values{"title": {"Fargo"}, "year": {"1996"}})
+
+	page := u.get("/movies/1")
+	require.Contains(t, page, "TV series")
+	require.Contains(t, page, "Edit series")
+	require.Contains(t, page, `name="season"`)
+	require.Contains(t, page, "https://www.themoviedb.org/tv/60622")
+	require.NotContains(t, u.get("/movies/2"), `name="season"`, "a movie's viewings have no season")
+
+	sse := u.ds("POST", "/movies/1/viewings", url.Values{"season": {"1"}, "viewed_on": {"2015-03-01"}, "rating": {"4.5"}})
+	require.Contains(t, sse, "Season 1")
+	sse = u.ds("POST", "/movies/1/viewings", url.Values{"season": {"2"}, "episode": {"3"}, "viewed_on": {"2016-04-10"}, "rating": {"3"}})
+	require.Contains(t, sse, "S2 E3")
+	sse = u.ds("POST", "/movies/1/viewings", url.Values{"episode": {"3"}, "rating": {"3"}})
+	require.Contains(t, sse, "an episode needs a season")
+	sse = u.ds("POST", "/movies/2/viewings", url.Values{"season": {"1"}, "rating": {"3"}})
+	require.Contains(t, sse, "only a TV series")
+
+	// The star bar rates the whole series, not the latest season.
+	sse = u.ds("POST", "/movies/1/rating", url.Values{"rating": {"4"}})
+	require.Contains(t, sse, "Rated Fargo")
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 3)
+	whole, ok := collection.LatestWhole(vs)
+	require.True(t, ok)
+	require.Equal(t, int64(8), *whole.Rating)
+
+	// Editing a season viewing keeps its season.
+	for _, v := range vs {
+		if collection.PartName(v.Season, v.Episode) == "Season 1" {
+			sse = u.ds("GET", fmt.Sprintf("/movies/1/mine?edit=%d", v.ID), nil)
+			require.Contains(t, sse, `name="season" value="1"`)
+			require.Contains(t, u.get(fmt.Sprintf("/viewings/%d/edit", v.ID)), `name="season" value="1"`)
+		}
+	}
+
+	// It can't become a movie while it has season viewings.
+	loc, _ = u.post("/movies/1", url.Values{"type": {"movie"}, "title": {"Fargo"}})
+	require.Empty(t, loc)
+	m, err = u.app.c.Movie(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, collection.TypeTV, m.Type)
+
+	// The list marks and filters series.
+	list := u.get("/movies")
+	require.Contains(t, list, `<span class="tag">TV</span>`)
+	require.Contains(t, list, "1 movies, 1 TV series")
+	require.NotContains(t, u.get("/movies?type=tv"), `href="/movies/2"`)
+	require.NotContains(t, u.get("/movies?type=movie"), `href="/movies/1"`)
+	require.Contains(t, u.get("/history"), "S2 E3")
 }

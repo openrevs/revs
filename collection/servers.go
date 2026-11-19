@@ -411,8 +411,10 @@ func (c *Collection) ImportMine(ctx context.Context, id int64) (rev int, stats I
 	return doc.Rev, stats, nil
 }
 
-// UserTitle is one title in another user's pulled collection.
+// UserTitle is one title, a movie or TV series (Type), in another
+// user's pulled collection.
 type UserTitle struct {
+	Type                 string
 	Name                 string
 	Year                 *int64
 	IMDB, TMDB, Wikidata *string
@@ -439,7 +441,7 @@ func (c *Collection) ServerUser(ctx context.Context, serverID int64, uid string)
 	for _, row := range rows {
 		t, ok := byID[row.TitleID]
 		if !ok {
-			t = &UserTitle{Name: row.Name, Year: row.Year, IMDB: row.ImdbID, TMDB: row.TmdbID, Wikidata: row.WikidataID}
+			t = &UserTitle{Type: row.Type, Name: row.Name, Year: row.Year, IMDB: row.ImdbID, TMDB: row.TmdbID, Wikidata: row.WikidataID}
 			byID[row.TitleID] = t
 			titles = append(titles, t)
 		}

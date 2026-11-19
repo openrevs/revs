@@ -161,7 +161,8 @@ const formHelp = "tab next field · ctrl+s save · esc cancel"
 // ---- movie form ----
 
 const (
-	fTitle = iota
+	fType = iota
+	fTitle
 	fYear
 	fIMDB
 	fTMDB
@@ -175,20 +176,24 @@ type movieForm struct {
 
 func newMovieForm(m *localdb.Movie, mf collection.MovieFields) *movieForm {
 	f := &movieForm{movie: m}
+	if mf.Type == "" {
+		mf.Type = collection.TypeMovie
+	}
 	f.fields = []field{
+		lineField("Type", mf.Type, `"movie", or "tv" for a TV series (use the series's IDs and first year)`, 6),
 		lineField("Title", mf.Title, "", 50),
 		lineField("Year", mf.Year, "optional", 6),
 		lineField("IMDb", mf.IMDB, "optional: an ID like tt0110912, or an IMDb URL", 50),
 		lineField("TMDB", mf.TMDB, "optional: an ID like 680, or a TMDB URL", 50),
 		lineField("Wikidata", mf.Wikidata, "optional: an ID like Q104123, or a Wikidata URL", 50),
 	}
-	f.setFocus(0)
+	f.setFocus(fTitle)
 	return f
 }
 
 func (s *movieForm) title() string {
 	if s.movie == nil {
-		return "Add a movie"
+		return "Add a movie or series"
 	}
 	return "Edit"
 }
@@ -199,7 +204,7 @@ func (s *movieForm) help() string      { return formHelp + " · ctrl+f look up o
 
 func (s *movieForm) movieFields() collection.MovieFields {
 	return collection.MovieFields{
-		Title: s.value(fTitle), Year: s.value(fYear),
+		Type: s.value(fType), Title: s.value(fTitle), Year: s.value(fYear),
 		IMDB: s.value(fIMDB), TMDB: s.value(fTMDB), Wikidata: s.value(fWikidata),
 	}
 }
@@ -213,7 +218,7 @@ func (s *movieForm) update(a *app, msg tea.Msg) tea.Cmd {
 		case "ctrl+f":
 			return a.pushForm(newSearchScreen(s.value(fTitle), func(a *app, r collection.SearchResult) {
 				mf := collection.MovieFieldsFromResult(r)
-				for i, v := range []string{mf.Title, mf.Year, mf.IMDB, mf.TMDB, mf.Wikidata} {
+				for i, v := range []string{mf.Type, mf.Title, mf.Year, mf.IMDB, mf.TMDB, mf.Wikidata} {
 					s.set(i, v)
 				}
 				a.pop()
@@ -267,6 +272,13 @@ func (s *movieForm) view(a *app, width, height int) string {
 
 // ---- viewing form ----
 
+// The viewing form's fields: a TV series's viewing starts with its
+// season and episode, and the rest follow (see viewingForm.at).
+const (
+	fSeason = iota
+	fEpisode
+)
+
 const (
 	fDate = iota
 	fRating
@@ -279,20 +291,36 @@ type viewingForm struct {
 	form
 }
 
+func (s *viewingForm) tv() bool { return s.movie.Type == collection.TypeTV }
+
+// at is the index of the field fDate, fRating, or fReview.
+func (s *viewingForm) at(f int) int {
+	if s.tv() {
+		return f + 2
+	}
+	return f
+}
+
 func newViewingForm(m localdb.Movie, v *localdb.Viewing) *viewingForm {
-	vf := collection.NewViewingFields()
+	vf := collection.NewViewingFields(m.Type)
 	if v != nil {
-		vf = collection.ViewingFieldsFrom(*v)
+		vf = collection.ViewingFieldsFrom(m.Type, *v)
 	}
 	if vf.Rating == "none" {
 		vf.Rating = ""
 	}
 	f := &viewingForm{movie: m, viewing: v}
-	f.fields = []field{
+	if f.tv() {
+		f.fields = []field{
+			lineField("Season", vf.Season, "blank for the whole series; 0 for specials", 4),
+			lineField("Episode", vf.Episode, "blank for the whole season", 4),
+		}
+	}
+	f.fields = append(f.fields,
 		lineField("Date", vf.Date, "YYYY-MM-DD, or blank if you don't remember", 12),
 		lineField("Rating", vf.Rating, fmt.Sprintf("½–%d stars in steps of ½ (e.g. 3.5), or blank for no rating", collection.MaxStars), 3),
 		areaField("Review", vf.Review, "", 70, 8),
-	}
+	)
 	f.setFocus(0)
 	return f
 }
@@ -318,7 +346,13 @@ func (s *viewingForm) update(a *app, msg tea.Msg) tea.Cmd {
 		return cmd
 	}
 
-	vf := collection.ViewingFields{Date: s.value(fDate), Rating: s.value(fRating), Review: s.value(fReview)}
+	vf := collection.ViewingFields{
+		Type: s.movie.Type,
+		Date: s.value(s.at(fDate)), Rating: s.value(s.at(fRating)), Review: s.value(s.at(fReview)),
+	}
+	if s.tv() {
+		vf.Season, vf.Episode = s.value(fSeason), s.value(fEpisode)
+	}
 	in, err := vf.Parse()
 	if err != nil {
 		s.err = capitalize(strings.ReplaceAll(err.Error(), "\n", "; "))
@@ -344,18 +378,18 @@ func (s *viewingForm) update(a *app, msg tea.Msg) tea.Cmd {
 
 func (s *viewingForm) view(a *app, width, height int) string {
 	stars := ""
-	if r := strings.TrimSpace(s.value(fRating)); r != "" {
+	if r := strings.TrimSpace(s.value(s.at(fRating))); r != "" {
 		vf := collection.ViewingFields{Rating: r}
 		if in, err := vf.Parse(); err == nil {
 			stars = "  " + styleStars.Render(collection.Stars(in.Rating))
 		}
 	}
-	return styleTitle.Render(movieTitle(s.movie.Title, s.movie.Year)) + stars + "\n\n" + s.form.view()
+	return styleTitle.Render(itemTitle(s.movie.Type, s.movie.Title, s.movie.Year)) + stars + "\n\n" + s.form.view()
 }
 
 // ---- Wikidata search ----
 
-// searchScreen looks up a movie. With onPick nil it adds the chosen
+// searchScreen looks up a movie or TV series. With onPick nil it adds the chosen
 // result to the collection; otherwise onPick receives it.
 type searchScreen struct {
 	query     textinput.Model
@@ -379,7 +413,7 @@ func newSearchScreen(q string, onPick func(a *app, r collection.SearchResult)) *
 
 func (s *searchScreen) title() string {
 	if s.onPick == nil {
-		return "Add a movie"
+		return "Add a movie or series"
 	}
 	return "Look up"
 }
@@ -497,7 +531,7 @@ func (s *searchScreen) focusQuery() {
 
 func (s *searchScreen) view(a *app, width, height int) string {
 	var b strings.Builder
-	intro := "Search Wikidata and a built-in list of popular films."
+	intro := "Search Wikidata for movies and TV series, and a built-in list of popular films."
 	if s.onPick != nil {
 		intro = "Pick a result to replace the title, year, and IDs in the form."
 	}
@@ -512,7 +546,7 @@ func (s *searchScreen) view(a *app, width, height int) string {
 		b.WriteString(styleWarn.Render(wrap(msg, width)) + "\n\n")
 	}
 	if s.ran != "" && len(s.results) == 0 {
-		b.WriteString("No movies found for " + fmt.Sprintf("%q", s.ran) + ".")
+		b.WriteString("No movies or TV series found for " + fmt.Sprintf("%q", s.ran) + ".")
 		if s.onPick == nil {
 			b.WriteString(" Press ctrl+n to enter the details yourself.")
 		}
@@ -523,7 +557,7 @@ func (s *searchScreen) view(a *app, width, height int) string {
 	used := strings.Count(b.String(), "\n")
 	b.WriteString(s.cur.render(len(s.results), max((height-used)/2, 1), func(i int, sel bool) string {
 		r := s.results[i]
-		t := movieTitle(r.Title, r.Year)
+		t := itemTitle(r.Type, r.Title, r.Year)
 		if sel && s.inResults {
 			t = styleSelected.Render(t)
 		} else {

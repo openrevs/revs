@@ -171,3 +171,10 @@ label.norating input { width: auto; margin: 0; }
 #flash .flash { margin: 0; box-shadow: 0 2px 10px rgb(0 0 0 / 0.12); pointer-events: auto; }
 #flash .flash-ok { animation: flash-fade 0.4s ease-in 3s forwards; }
 @keyframes flash-fade { to { opacity: 0; visibility: hidden; } }
+
+/* Movie or TV series, on the movie form. */
+fieldset.choice { border: 0; padding: 0; margin: 0; display: flex; gap: 1.2rem; align-items: center; }
+fieldset.choice legend { font-size: 0.9rem; color: var(--muted); padding: 0; margin-bottom: 0.2rem; }
+fieldset.choice label { display: inline-flex; gap: 0.3rem; align-items: center; color: var(--fg); }
+fieldset.choice input { width: auto; margin: 0; }
+.filters { display: flex; gap: 0.8rem; margin: 0.4rem 0; }

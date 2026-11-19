@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-// DefaultWikidataURL is the Wikidata API endpoint used for movie lookup.
+// DefaultWikidataURL is the Wikidata API endpoint used for movie and TV
+// series lookup.
 const DefaultWikidataURL = "https://www.wikidata.org/w/api.php"
 
 // userAgent identifies this client to Wikimedia, whose API policy asks
@@ -32,21 +33,42 @@ var filmClasses = map[string]bool{
 	"Q17517379": true, // animated short film
 }
 
-// filmFilter is a CirrusSearch keyword matching items that are an
-// instance of a film class or have a TMDB movie id ("|" means or).
-func filmFilter() string {
-	terms := []string{"P4947"}
-	for _, class := range slices.Sorted(maps.Keys(filmClasses)) {
-		terms = append(terms, "P31="+class)
+// tvClasses are "instance of" (P31) values treated as TV series. The
+// ratingset spec follows IMDb and TMDB: a miniseries is a series too.
+var tvClasses = map[string]bool{
+	"Q5398426":   true, // television series
+	"Q1259759":   true, // miniseries
+	"Q526877":    true, // web series
+	"Q63952888":  true, // anime television series
+	"Q117467246": true, // animated television series
+	"Q581714":    true, // animated series
+	"Q170238":    true, // sitcom
+}
+
+// Wikidata properties holding TMDB ids, which number movies and TV
+// series separately.
+const (
+	propTMDBMovie = "P4947"
+	propTMDBTV    = "P4983"
+)
+
+// titleFilter is a CirrusSearch keyword matching items that are an
+// instance of a film or TV series class or have a TMDB movie or TV
+// series id ("|" means or).
+func titleFilter() string {
+	terms := []string{propTMDBMovie, propTMDBTV}
+	for _, classes := range []map[string]bool{filmClasses, tvClasses} {
+		for _, class := range slices.Sorted(maps.Keys(classes)) {
+			terms = append(terms, "P31="+class)
+		}
 	}
 	return "haswbstatement:" + strings.Join(terms, "|")
 }
 
-// nonFilmClasses are "instance of" values that rule an item out even
-// if it otherwise looks like a film.
-var nonFilmClasses = map[string]bool{
-	"Q5398426":  true, // television series
-	"Q1259759":  true, // miniseries
+// excludedClasses are "instance of" values that rule an item out even
+// if it otherwise looks like a film or series. Seasons and episodes
+// aren't items of their own: a series's viewings name them by number.
+var excludedClasses = map[string]bool{
 	"Q21191270": true, // television series episode
 	"Q3464665":  true, // television series season
 	"Q1261214":  true, // television special
@@ -56,8 +78,10 @@ var nonFilmClasses = map[string]bool{
 	"Q482994":   true, // album
 }
 
-// SearchResult is one candidate movie from a search, with ids from Wikidata.
+// SearchResult is one candidate movie or TV series from a search, with
+// ids from Wikidata. Type is TypeMovie or TypeTV.
 type SearchResult struct {
+	Type        string
 	ID          string
 	Title       string
 	Description string
@@ -71,12 +95,13 @@ type wikidata struct {
 	http    *http.Client
 }
 
-// Search finds movies matching query. It uses Wikidata's full-text
-// search restricted to items with a film class or a TMDB movie id:
-// the label search (wbsearchentities) can't filter, and for a query
-// like "star wars" its hits are almost all games and albums. Items
-// are checked again after fetching, which also drops TV series,
-// games, and franchises that carry a film statement by mistake.
+// Search finds movies and TV series matching query. It uses Wikidata's
+// full-text search restricted to items with a film or TV series class
+// or a TMDB id: the label search (wbsearchentities) can't filter, and
+// for a query like "star wars" its hits are almost all games and
+// albums. Items are checked again after fetching, which also drops
+// episodes, seasons, games, and franchises that carry a film or series
+// statement by mistake.
 func (w *wikidata) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	query = strings.Join(strings.Fields(query), " ")
 	if query == "" {
@@ -93,7 +118,7 @@ func (w *wikidata) Search(ctx context.Context, query string) ([]SearchResult, er
 	err := w.get(ctx, url.Values{
 		"action":   {"query"},
 		"list":     {"search"},
-		"srsearch": {query + " " + filmFilter()},
+		"srsearch": {query + " " + titleFilter()},
 		"srlimit":  {"25"},
 		"srprop":   {""},
 	}, &search)
@@ -130,9 +155,8 @@ func (w *wikidata) Search(ctx context.Context, query string) ([]SearchResult, er
 		if !ok {
 			continue
 		}
-		r := e.result(id)
-		if r.isFilm {
-			results = append(results, r.SearchResult)
+		if r, ok := e.result(id); ok {
+			results = append(results, r)
 		}
 	}
 	return results, nil
@@ -195,11 +219,6 @@ func (e wdEntity) strings(prop string) []string {
 	return out
 }
 
-type wdCandidate struct {
-	SearchResult
-	isFilm bool
-}
-
 // anyValue returns a deterministic value from a language map, or "".
 func anyValue(m map[string]struct{ Value string }) string {
 	for _, lang := range slices.Sorted(maps.Keys(m)) {
@@ -220,46 +239,72 @@ func firstNonEmpty(ss ...string) string {
 	return ""
 }
 
-func (e wdEntity) result(id string) wdCandidate {
-	c := wdCandidate{SearchResult: SearchResult{
+// result reads an entity as a search result: a movie or a TV series,
+// or, with ok false, neither.
+func (e wdEntity) result(id string) (r SearchResult, ok bool) {
+	r = SearchResult{
 		ID:          id,
 		Title:       firstNonEmpty(e.Labels["en"].Value, e.Labels["mul"].Value, anyValue(e.Labels), id),
 		Description: firstNonEmpty(e.Descriptions["en"].Value, e.Descriptions["mul"].Value),
-	}}
+	}
 
 	for _, v := range e.strings("P345") { // IMDb ID
 		if imdb := normalizeIMDB(v); imdb != nil {
-			c.IMDB = imdb
+			r.IMDB = imdb
 			break
 		}
 	}
-	for _, v := range e.strings("P4947") { // TMDB movie ID
-		if tmdb := normalizeTMDB(v); tmdb != nil {
-			c.TMDB = tmdb
-			c.isFilm = true
-			break
+	firstTMDB := func(prop, typ string) *string {
+		for _, v := range e.strings(prop) {
+			if tmdb := normalizeTMDB(typ, v); tmdb != nil {
+				return tmdb
+			}
 		}
+		return nil
 	}
+	tmdbMovie, tmdbTV := firstTMDB(propTMDBMovie, TypeMovie), firstTMDB(propTMDBTV, TypeTV)
+
+	// The item's classes decide; without a film or series class, its
+	// TMDB ids do. A film that is also listed as a series is a series
+	// only if TMDB has it as one alone.
+	film, tv := false, false
 	for _, v := range e.strings("P31") { // instance of
-		if filmClasses[v] {
-			c.isFilm = true
+		film = film || filmClasses[v]
+		tv = tv || tvClasses[v]
+		if excludedClasses[v] {
+			return r, false
 		}
 	}
-	for _, v := range e.strings("P31") {
-		if nonFilmClasses[v] {
-			c.isFilm = false
+	if !film && !tv {
+		film, tv = tmdbMovie != nil, tmdbTV != nil
+	}
+	switch {
+	case tv && (!film || (tmdbTV != nil && tmdbMovie == nil)):
+		r.Type, r.TMDB = TypeTV, tmdbTV
+	case film:
+		r.Type, r.TMDB = TypeMovie, tmdbMovie
+	default:
+		return r, false
+	}
+
+	// Times look like "+1994-05-21T00:00:00Z". A series's year is when
+	// it first aired: its start time, or failing that its earliest
+	// publication date. A film's is its earliest publication date, as
+	// films list several regional releases.
+	dates := e.strings("P577") // publication date
+	if r.Type == TypeTV {
+		if start := e.strings("P580"); len(start) > 0 { // start time
+			dates = start
 		}
 	}
-	// Publication date: times look like "+1994-05-21T00:00:00Z". Use
-	// the earliest year, as films list several regional releases.
-	for _, v := range e.strings("P577") {
+	for _, v := range dates {
 		var y int64
 		if _, err := fmt.Sscanf(strings.TrimPrefix(v, "+"), "%4d", &y); err == nil && y > 0 {
-			if c.Year == nil || y < *c.Year {
-				c.Year = &y
+			if r.Year == nil || y < *r.Year {
+				r.Year = &y
 			}
 		}
 	}
 
-	return c
+	return r, true
 }

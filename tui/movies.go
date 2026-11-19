@@ -12,18 +12,25 @@ import (
 
 // ---- movie list ----
 
+// typeFilters are the movie list's filters by type, in the order t
+// cycles through them.
+var typeFilters = []struct{ typ, label string }{
+	{"", "movies and TV series"}, {collection.TypeMovie, "movies"}, {collection.TypeTV, "TV series"},
+}
+
 type moviesScreen struct {
 	query  string
+	filter int // index into typeFilters
 	movies []localdb.ListMoviesRow
 	counts localdb.CountMoviesAndViewingsRow
 	cur    cursor
 }
 
-func (s *moviesScreen) title() string { return "Movies" }
+func (s *moviesScreen) title() string { return "Movies & TV" }
 
 func (s *moviesScreen) load(a *app) error {
 	var err error
-	if s.movies, err = a.c.Movies(a.ctx, s.query); err != nil {
+	if s.movies, err = a.c.Movies(a.ctx, s.query, typeFilters[s.filter].typ); err != nil {
 		return err
 	}
 	s.counts, err = a.c.Counts(a.ctx)
@@ -31,7 +38,7 @@ func (s *moviesScreen) load(a *app) error {
 }
 
 func (s *moviesScreen) help() string {
-	return "enter open · r rate · +/- nudge rating · a add · / filter · d delete"
+	return "enter open · r rate · +/- nudge rating · a add · / filter · t type · d delete"
 }
 
 func (s *moviesScreen) selected() (localdb.ListMoviesRow, bool) {
@@ -65,6 +72,12 @@ func (s *moviesScreen) update(a *app, msg tea.Msg) tea.Cmd {
 		}
 	case "a":
 		a.push(newSearchScreen(s.query, nil))
+	case "t":
+		s.filter = (s.filter + 1) % len(typeFilters)
+		s.cur = cursor{}
+		if err := s.load(a); err != nil {
+			a.fail(err)
+		}
 	case "/":
 		return a.ask("Filter titles:", s.query, func(a *app, v string) tea.Cmd {
 			s.query = v
@@ -91,26 +104,32 @@ func (s *moviesScreen) update(a *app, msg tea.Msg) tea.Cmd {
 }
 
 func (s *moviesScreen) view(a *app, width, height int) string {
-	head := fmt.Sprintf("%d movies", s.counts.Movies)
-	if s.counts.Viewings != s.counts.Movies {
+	head := fmt.Sprintf("%d movies, %d TV series", s.counts.Movies, s.counts.Series)
+	if s.counts.Viewings > 0 {
 		head += fmt.Sprintf(", %d viewings", s.counts.Viewings)
 	}
-	if s.query != "" {
+	f := typeFilters[s.filter]
+	switch {
+	case s.query != "" && f.typ != "":
+		head = fmt.Sprintf("%d %s matching %q", len(s.movies), f.label, s.query) + styleDim.Render(" (/ or t to change)")
+	case s.query != "":
 		head = fmt.Sprintf("%d matching %q", len(s.movies), s.query) + styleDim.Render(" (/ to change)")
+	case f.typ != "":
+		head = fmt.Sprintf("%d %s", len(s.movies), f.label) + styleDim.Render(" (t to change)")
 	}
 	head = styleDim.Render(head) + "\n\n"
 
 	if len(s.movies) == 0 {
-		if s.query != "" {
+		if s.query != "" || f.typ != "" {
 			return head + "No matches."
 		}
-		return head + "Your collection is empty. Press a to add a movie."
+		return head + "Your collection is empty. Press a to add a movie or TV series."
 	}
 
 	titleW := max(width-2-5-2-24, 10)
 	return head + s.cur.render(len(s.movies), height-2, func(i int, sel bool) string {
 		m := s.movies[i]
-		t := pad(movieTitle(m.Title, m.Year), titleW)
+		t := pad(itemTitle(m.Type, m.Title, m.Year), titleW)
 		if sel {
 			t = styleSelected.Render(t)
 		}
@@ -173,6 +192,27 @@ func movieTitle(title string, year *int64) string {
 	return title
 }
 
+// itemTitle is movieTitle, marking a TV series.
+func itemTitle(typ, title string, year *int64) string {
+	if typ == collection.TypeTV {
+		return movieTitle(title, year) + " [TV]"
+	}
+	return movieTitle(title, year)
+}
+
+// partLabel is a viewing's season or episode, padded to line up, for a
+// TV series's viewings; for a movie's, it is empty.
+func partLabel(typ string, season, episode *int64) string {
+	if typ != collection.TypeTV {
+		return ""
+	}
+	p := collection.PartName(season, episode)
+	if p == "" {
+		p = "Series"
+	}
+	return pad(p, 11) + "  "
+}
+
 // ---- one movie ----
 
 type movieScreen struct {
@@ -205,25 +245,37 @@ func (s *movieScreen) load(a *app) error {
 	return nil
 }
 
+func (s *movieScreen) tv() bool { return s.movie.Type == collection.TypeTV }
+
 func (s *movieScreen) help() string {
 	var h string
-	switch len(s.viewings) {
-	case 0:
+	switch {
+	case s.tv() && len(s.viewings) == 0:
+		h = "r rate series · v add a season, episode, or series viewing"
+	case s.tv():
+		h = "r rate series · +/- nudge · enter edit viewing · v add viewing · x delete viewing"
+	case len(s.viewings) == 0:
 		h = "r rate · v add date or review"
-	case 1:
+	case len(s.viewings) == 1:
 		h = "r rate · +/- nudge · enter edit review · v add another viewing · x delete review"
 	default:
 		h = "r rate latest · +/- nudge · enter edit viewing · v add viewing · x delete viewing"
 	}
-	return h + " · e edit movie · D delete movie"
+	what := "movie"
+	if s.tv() {
+		what = "series"
+	}
+	return h + " · e edit " + what + " · D delete " + what
 }
 
-// rating is the movie's current rating: its latest viewing's, or -1.
+// rating is the movie's current rating: its latest whole-item
+// viewing's (for a series, not a season's or episode's), or -1.
 func (s *movieScreen) rating() int64 {
-	if len(s.viewings) == 0 || s.viewings[0].Rating == nil {
+	v, ok := collection.LatestWhole(s.viewings)
+	if !ok || v.Rating == nil {
 		return -1
 	}
-	return *s.viewings[0].Rating
+	return *v.Rating
 }
 
 func (s *movieScreen) selected() (localdb.Viewing, bool) {
@@ -260,6 +312,9 @@ func (s *movieScreen) update(a *app, msg tea.Msg) tea.Cmd {
 			if v.ViewedOn != nil {
 				when = "the viewing on " + *v.ViewedOn
 			}
+			if p := collection.PartName(v.Season, v.Episode); p != "" {
+				when += " (" + p + ")"
+			}
 			a.confirmThen("Delete "+when+"?", func(a *app) tea.Cmd {
 				if err := a.c.DeleteViewing(a.ctx, v.ID); err != nil {
 					a.fail(err)
@@ -290,13 +345,17 @@ func (s *movieScreen) update(a *app, msg tea.Msg) tea.Cmd {
 func (s *movieScreen) view(a *app, width, height int) string {
 	var b strings.Builder
 	m := s.movie
-	b.WriteString(styleTitle.Render(movieTitle(m.Title, m.Year)) + "\n")
-	if links := movieLinks(m.ImdbID, m.TmdbID, m.WikidataID); links != "" {
+	b.WriteString(styleTitle.Render(movieTitle(m.Title, m.Year)))
+	if s.tv() {
+		b.WriteString(styleDim.Render("  TV series"))
+	}
+	b.WriteString("\n")
+	if links := movieLinks(m.Type, m.ImdbID, m.TmdbID, m.WikidataID); links != "" {
 		b.WriteString(links + "\n")
 	}
 
 	heading := "Your viewings"
-	if len(s.viewings) <= 1 {
+	if len(s.viewings) <= 1 && !s.tv() {
 		heading = "Your review"
 	}
 	b.WriteString("\n" + styleHeading.Render(heading) + "\n")
@@ -310,9 +369,10 @@ func (s *movieScreen) view(a *app, width, height int) string {
 			if v.ViewedOn == nil {
 				date = styleDim.Render(pad("undated", 10))
 			}
-			line := styleStars.Render(collection.Stars(v.Rating)) + "  " + date
+			part := partLabel(m.Type, v.Season, v.Episode)
+			line := part + styleStars.Render(collection.Stars(v.Rating)) + "  " + date
 			if v.Review != "" {
-				line += "  " + styleDim.Render(truncate(firstLine(v.Review), width-26))
+				line += "  " + styleDim.Render(truncate(firstLine(v.Review), width-26-len(part)))
 			}
 			return line
 		}) + "\n")
@@ -324,7 +384,7 @@ func (s *movieScreen) view(a *app, width, height int) string {
 	if len(s.others) > 0 {
 		b.WriteString("\n" + styleHeading.Render("Others' reviews") + "\n")
 		for _, o := range s.others {
-			line := "  " + pad(collection.ShortID(o.Userid), 13) + "  " +
+			line := "  " + pad(collection.ShortID(o.Userid), 13) + "  " + partLabel(m.Type, o.Season, o.Episode) +
 				pad(collection.Deref(o.ViewedOn), 10) + "  " + styleStars.Render(collection.Stars(o.Rating))
 			b.WriteString(line + "\n")
 			if o.Comment != "" {
@@ -335,14 +395,14 @@ func (s *movieScreen) view(a *app, width, height int) string {
 	return b.String()
 }
 
-// movieLinks lists a movie's ids with links.
-func movieLinks(imdb, tmdb, wikidata *string) string {
+// movieLinks lists the ids, with links, of a movie or series (typ).
+func movieLinks(typ string, imdb, tmdb, wikidata *string) string {
 	var lines []string
 	if imdb != nil {
 		lines = append(lines, styleDim.Render("IMDb      ")+collection.IMDBURL(*imdb))
 	}
 	if tmdb != nil {
-		lines = append(lines, styleDim.Render("TMDB      ")+collection.TMDBURL(*tmdb))
+		lines = append(lines, styleDim.Render("TMDB      ")+collection.TMDBURL(typ, *tmdb))
 	}
 	if wikidata != nil {
 		lines = append(lines, styleDim.Render("Wikidata  ")+collection.WikidataURL(*wikidata))
@@ -373,7 +433,7 @@ func (s *historyScreen) load(a *app) error {
 	return err
 }
 
-func (s *historyScreen) help() string { return "enter open movie" }
+func (s *historyScreen) help() string { return "enter open" }
 
 func (s *historyScreen) update(a *app, msg tea.Msg) tea.Cmd {
 	if s.cur.move(msg, len(s.rows), a.height/2) {
@@ -397,7 +457,11 @@ func (s *historyScreen) view(a *app, width, height int) string {
 		if r.ViewedOn == nil {
 			date = styleDim.Render(pad("undated", 10))
 		}
-		t := pad(movieTitle(r.Title, r.Year), titleW)
+		title := itemTitle(r.Type, r.Title, r.Year)
+		if p := collection.PartName(r.Season, r.Episode); p != "" {
+			title = movieTitle(r.Title, r.Year) + " · " + p
+		}
+		t := pad(title, titleW)
 		if sel {
 			t = styleSelected.Render(t)
 		}

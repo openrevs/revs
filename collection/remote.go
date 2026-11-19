@@ -108,7 +108,7 @@ func (c *Collection) reindex(ctx context.Context, r *remote, userIDs []string, a
 // Following the ratingset spec, a document whose author line lacks a
 // valid rating scale is indexed with no items, and item lines that
 // don't parse or are invalid are skipped rather than failing the whole
-// index. Items of types other than movie are skipped too.
+// index. Items of types other than movie and tv are skipped too.
 func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc *client.Document) error {
 	var items []ratingset.Item
 	lines := bytes.Split(doc.Data, []byte("\n"))
@@ -129,7 +129,10 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 				continue
 			}
 			it, ok := readItem(line, scale)
-			if !ok || !it.IsType(ratingset.ItemTypeMovie) {
+			if !ok {
+				continue
+			}
+			if it.Type, ok = itemType(it.Type); !ok {
 				continue
 			}
 			items = append(items, it)
@@ -144,7 +147,7 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 	}
 
 	for _, t := range items {
-		p := localdb.InsertIndexedTitleParams{ServerID: serverID, Userid: doc.UserID, Name: strings.TrimSpace(t.Title)}
+		p := localdb.InsertIndexedTitleParams{ServerID: serverID, Userid: doc.UserID, Type: t.Type, Name: strings.TrimSpace(t.Title)}
 		if t.Year != nil {
 			y := int64(*t.Year)
 			p.Year = &y
@@ -154,7 +157,7 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 			case refIMDB:
 				p.ImdbID = normalizeIMDB(v)
 			case refTMDB:
-				p.TmdbID = normalizeTMDB(v)
+				p.TmdbID = normalizeTMDB(t.Type, v)
 			case refWikidata:
 				p.WikidataID = normalizeWikidata(v)
 			}
@@ -164,7 +167,7 @@ func indexDocument(ctx context.Context, q *localdb.Queries, serverID int64, doc 
 			return err
 		}
 		for _, rv := range t.Entries {
-			rp := localdb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date}
+			rp := localdb.InsertIndexedReviewParams{TitleID: titleID, ViewedOn: rv.Date, Season: int64Of(rv.Season), Episode: int64Of(rv.Episode)}
 			rp.Rating = scale.scale(rv.Rating)
 			if rv.Review != nil {
 				rp.Comment = *rv.Review

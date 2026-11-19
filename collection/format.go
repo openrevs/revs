@@ -65,7 +65,58 @@ func TimeAgo(ts *string) string {
 	}
 }
 
-// IMDBURL, TMDBURL, and WikidataURL link to a movie on those sites.
+// IMDBURL and WikidataURL link to a movie or TV series on those sites.
 func IMDBURL(id string) string     { return "https://www.imdb.com/title/" + id + "/" }
-func TMDBURL(id string) string     { return "https://www.themoviedb.org/movie/" + id }
 func WikidataURL(id string) string { return "https://www.wikidata.org/wiki/" + id }
+
+// TMDBURL links to an item of type typ on TMDB, which numbers movies
+// and TV series separately.
+func TMDBURL(typ, id string) string {
+	if typ == TypeTV {
+		return "https://www.themoviedb.org/tv/" + id
+	}
+	return "https://www.themoviedb.org/movie/" + id
+}
+
+// TypeName names an item type for display: "Movie" or "TV series".
+func TypeName(typ string) string {
+	if typ == TypeTV {
+		return "TV series"
+	}
+	return "Movie"
+}
+
+// PartName names the part of a TV series a viewing is about: "Season
+// 2", "S2 E5", or for season 0, "Specials" and "Special 5". It is ""
+// for a viewing of the whole item. It accepts *int64 or *int.
+func PartName(season, episode any) string {
+	s, ok := intPtr(season)
+	if !ok {
+		return ""
+	}
+	e, hasEp := intPtr(episode)
+	switch {
+	case s == 0 && hasEp:
+		return fmt.Sprintf("Special %d", e)
+	case s == 0:
+		return "Specials"
+	case hasEp:
+		return fmt.Sprintf("S%d E%d", s, e)
+	default:
+		return fmt.Sprintf("Season %d", s)
+	}
+}
+
+func intPtr(v any) (int64, bool) {
+	switch p := v.(type) {
+	case *int64:
+		if p != nil {
+			return *p, true
+		}
+	case *int:
+		if p != nil {
+			return int64(*p), true
+		}
+	}
+	return 0, false
+}

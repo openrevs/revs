@@ -145,9 +145,18 @@ func idParam(r *http.Request, name string) (int64, error) {
 
 // ---- movies ----
 
+// typeFilter is one of the movie list's filters by type.
+type typeFilter struct{ Type, Label string }
+
+var typeFilters = []typeFilter{{"", "All"}, {collection.TypeMovie, "Movies"}, {collection.TypeTV, "TV series"}}
+
 func (a *App) moviesList(w http.ResponseWriter, r *http.Request) error {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	movies, err := a.c.Movies(r.Context(), q)
+	typ := r.URL.Query().Get("type")
+	if typ != collection.TypeMovie && typ != collection.TypeTV {
+		typ = ""
+	}
+	movies, err := a.c.Movies(r.Context(), q, typ)
 	if err != nil {
 		return err
 	}
@@ -155,17 +164,20 @@ func (a *App) moviesList(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	a.render(w, r, http.StatusOK, "movies.html", view{Title: "Movies", Nav: "movies", Data: map[string]any{
-		"Query":  q,
-		"Movies": movies,
-		"Counts": counts,
-		"Next":   r.URL.RequestURI(),
+	a.render(w, r, http.StatusOK, "movies.html", view{Title: "Movies & TV", Nav: "movies", Data: map[string]any{
+		"Query":   q,
+		"Type":    typ,
+		"Filters": typeFilters,
+		"Movies":  movies,
+		"Counts":  counts,
+		"Next":    r.URL.RequestURI(),
 	}})
 	return nil
 }
 
 func movieFields(r *http.Request) collection.MovieFields {
 	return collection.MovieFields{
+		Type:     r.PostFormValue("type"),
 		Title:    r.PostFormValue("title"),
 		Year:     r.PostFormValue("year"),
 		IMDB:     r.PostFormValue("imdb_id"),
@@ -174,11 +186,15 @@ func movieFields(r *http.Request) collection.MovieFields {
 	}
 }
 
-func viewingFields(r *http.Request) collection.ViewingFields {
+// viewingFields reads a posted viewing of an item of type typ.
+func viewingFields(r *http.Request, typ string) collection.ViewingFields {
 	return collection.ViewingFields{
-		Date:   r.PostFormValue("viewed_on"),
-		Rating: r.PostFormValue("rating"),
-		Review: r.PostFormValue("review"),
+		Type:    typ,
+		Date:    r.PostFormValue("viewed_on"),
+		Rating:  r.PostFormValue("rating"),
+		Review:  r.PostFormValue("review"),
+		Season:  r.PostFormValue("season"),
+		Episode: r.PostFormValue("episode"),
 	}
 }
 
@@ -188,7 +204,7 @@ func (a *App) movieNew(w http.ResponseWriter, r *http.Request) error {
 	// Results already in the collection show their current rating.
 	ratings := map[string]int64{}
 	if len(results) > 0 {
-		mine, err := a.c.Movies(r.Context(), "")
+		mine, err := a.c.Movies(r.Context(), "", "")
 		if err != nil {
 			return err
 		}
@@ -198,7 +214,7 @@ func (a *App) movieNew(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
-	a.render(w, r, http.StatusOK, "movie_new.html", view{Title: "Add a movie", Nav: "movies", Data: map[string]any{
+	a.render(w, r, http.StatusOK, "movie_new.html", view{Title: "Add a movie or series", Nav: "movies", Data: map[string]any{
 		"Next":      r.URL.RequestURI(),
 		"Ratings":   ratings,
 		"Query":     q,
@@ -221,7 +237,7 @@ func (a *App) movieCreate(w http.ResponseWriter, r *http.Request) error {
 			return a.patchFlash(w, r, "error", err.Error())
 		}
 		a.render(w, r, http.StatusUnprocessableEntity, "movie_new.html", view{
-			Title: "Add a movie", Nav: "movies", Flash: &flash{Kind: "error", Msg: err.Error()},
+			Title: "Add a movie or series", Nav: "movies", Flash: &flash{Kind: "error", Msg: err.Error()},
 			Data: map[string]any{"Form": form},
 		})
 		return nil
@@ -324,8 +340,9 @@ func movieURL(id int64) string { return "/movies/" + strconv.FormatInt(id, 10) }
 // and the add-a-viewing form.
 type mineData struct {
 	Movie    localdb.Movie
+	TV       bool // a TV series, whose viewings may be of seasons or episodes
 	Viewings []localdb.Viewing
-	Rating   *int64 // the newest viewing's, which the star bar sets
+	Rating   *int64 // the newest whole-item viewing's, which the star bar sets
 	Single   bool   // exactly one viewing, shown as "Your review"
 
 	EditID   int64
@@ -344,9 +361,9 @@ func (a *App) mine(r *http.Request, m localdb.Movie) (mineData, error) {
 	if err != nil {
 		return mineData{}, err
 	}
-	d := mineData{Movie: m, Viewings: vs, Single: len(vs) == 1, Form: collection.NewViewingFields()}
-	if len(vs) > 0 {
-		d.Rating = vs[0].Rating
+	d := mineData{Movie: m, TV: m.Type == collection.TypeTV, Viewings: vs, Single: len(vs) == 1, Form: collection.NewViewingFields(m.Type)}
+	if v, ok := collection.LatestWhole(vs); ok {
+		d.Rating = v.Rating
 	}
 	return d, nil
 }
@@ -402,7 +419,7 @@ func (a *App) movieMine(w http.ResponseWriter, r *http.Request) error {
 	if e, err := strconv.ParseInt(r.URL.Query().Get("edit"), 10, 64); err == nil {
 		for _, v := range mine.Viewings {
 			if v.ID == e {
-				mine.EditID, mine.EditForm = v.ID, collection.ViewingFieldsFrom(v)
+				mine.EditID, mine.EditForm = v.ID, collection.ViewingFieldsFrom(m.Type, v)
 			}
 		}
 	}
@@ -443,15 +460,18 @@ func (a *App) movieUpdate(w http.ResponseWriter, r *http.Request) error {
 
 	form := movieFields(r)
 	in, err := form.Parse()
+	if err == nil {
+		err = a.c.UpdateMovie(r.Context(), id, in)
+		if err != nil && !errors.Is(err, collection.ErrHasSeasons) {
+			return err
+		}
+	}
 	if err != nil {
 		a.render(w, r, http.StatusUnprocessableEntity, "movie_edit.html", view{
 			Title: "Edit " + m.Title, Nav: "movies", Flash: &flash{Kind: "error", Msg: err.Error()},
 			Data: map[string]any{"Movie": m, "Form": form},
 		})
 		return nil
-	}
-	if err := a.c.UpdateMovie(r.Context(), id, in); err != nil {
-		return err
 	}
 	redirect(w, r, movieURL(id), "ok", "Saved.")
 	return nil
@@ -488,7 +508,7 @@ func (a *App) viewingCreate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	form := viewingFields(r)
+	form := viewingFields(r, m.Type)
 	in, err := form.Parse()
 	if err != nil {
 		mine.Form, mine.AddOpen = form, true
@@ -534,7 +554,7 @@ func (a *App) viewingEdit(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	a.render(w, r, http.StatusOK, "viewing_edit.html", view{Title: "Edit viewing", Nav: "movies", Data: map[string]any{
-		"Movie": m, "Viewing": v, "Form": collection.ViewingFieldsFrom(v),
+		"Movie": m, "Viewing": v, "Form": collection.ViewingFieldsFrom(m.Type, v),
 	}})
 	return nil
 }
@@ -552,7 +572,7 @@ func (a *App) viewingUpdate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	form := viewingFields(r)
+	form := viewingFields(r, m.Type)
 	in, err := form.Parse()
 	if err != nil {
 		if isDatastar(r) {

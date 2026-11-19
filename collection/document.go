@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	// Keys of a movie item's "refs" object.
+	// Keys of a movie or tv item's "refs" object. For a tv item they
+	// name the series as a whole.
 	refIMDB     = "imdb"
 	refTMDB     = "tmdb"
 	refWikidata = "wikidata"
@@ -28,7 +29,7 @@ const (
 
 // buildContent renders the whole local collection as the unsigned data
 // lines of a ratingset: one author line, then one item line per movie
-// with its viewings as entries. This is exactly the input client.Push expects.
+// or TV series with its viewings as entries. This is exactly the input client.Push expects.
 // Lines are deterministic for unchanged data, and byte-identical
 // duplicates (which sjsonl cannot sign) are dropped — they carry no
 // information.
@@ -74,7 +75,7 @@ func (c *Collection) buildContent(ctx context.Context, userID string) ([]byte, e
 }
 
 func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) ratingset.Item {
-	t := ratingset.Item{Type: ratingset.ItemTypeMovie, Title: m.Title}
+	t := ratingset.Item{Type: m.Type, Title: m.Title}
 	if m.Year != nil {
 		y := int(*m.Year)
 		t.Year = &y
@@ -90,9 +91,10 @@ func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) ratingset.Item {
 		t.Refs = refs
 	}
 
-	// Oldest first, undated first; AllViewings already orders by date then id.
+	// Oldest first, undated first; AllViewings already orders by date
+	// then id, which for a series means by date, not season.
 	for _, v := range viewings {
-		e := ratingset.Entry{Date: v.ViewedOn}
+		e := ratingset.Entry{Date: v.ViewedOn, Season: intOf(v.Season), Episode: intOf(v.Episode)}
 		if v.Rating != nil {
 			n := int(*v.Rating)
 			e.Rating = &n
@@ -105,6 +107,22 @@ func itemFromMovie(m localdb.Movie, viewings []localdb.Viewing) ratingset.Item {
 	}
 
 	return t
+}
+
+func intOf(p *int64) *int {
+	if p == nil {
+		return nil
+	}
+	n := int(*p)
+	return &n
+}
+
+func int64Of(p *int) *int64 {
+	if p == nil {
+		return nil
+	}
+	n := int64(*p)
+	return &n
 }
 
 // Export signs the collection as the author's newest version, the same
@@ -246,7 +264,8 @@ func parseRatingset(data []byte) (*parsedDoc, error) {
 	return pd, nil
 }
 
-// ImportStats reports what a merge did.
+// ImportStats reports what a merge did. Movies counts movies and TV
+// series alike; SkippedNonFilm counts items of other types.
 type ImportStats struct {
 	MoviesAdded    int
 	MoviesMatched  int
@@ -304,10 +323,10 @@ func (c *Collection) Import(ctx context.Context, data []byte) (ImportResult, err
 }
 
 func (s ImportStats) String() string {
-	msg := fmt.Sprintf("Imported %d new movies (%d already present) and %d new viewings (%d already present).",
+	msg := fmt.Sprintf("Imported %d new titles (%d already present) and %d new viewings (%d already present).",
 		s.MoviesAdded, s.MoviesMatched, s.ViewingsAdded, s.ViewingsKept)
 	if s.SkippedNonFilm > 0 {
-		msg += fmt.Sprintf(" Skipped %d non-movie titles.", s.SkippedNonFilm)
+		msg += fmt.Sprintf(" Skipped %d titles that are neither movies nor TV series.", s.SkippedNonFilm)
 	}
 	if s.SkippedInvalid > 0 {
 		msg += fmt.Sprintf(" Skipped %d invalid titles.", s.SkippedInvalid)
@@ -315,12 +334,12 @@ func (s ImportStats) String() string {
 	return msg
 }
 
-// mergeItems adds movie items and their entries to the local collection
-// without removing or overwriting anything. Items are expected to be
+// mergeItems adds movie and tv items and their entries to the local
+// collection without removing or overwriting anything. Items are expected to be
 // valid (see ratingset.Item.Validate), with ratings in half stars. An item
 // matches an existing movie as findMovie describes; missing ids are
 // filled in on a match. An entry is added unless the movie already has
-// a viewing with the same date, rating, and text.
+// a viewing with the same date, rating, text, season, and episode.
 func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (ImportStats, error) {
 	var stats ImportStats
 
@@ -332,7 +351,8 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 	q := c.q.WithTx(tx)
 
 	for _, t := range items {
-		if !t.IsType(ratingset.ItemTypeMovie) {
+		typ, ok := itemType(t.Type)
+		if !ok {
 			stats.SkippedNonFilm++
 			continue
 		}
@@ -342,7 +362,7 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 			continue
 		}
 
-		in := MovieInput{Title: name}
+		in := MovieInput{Type: typ, Title: name}
 		if t.Year != nil {
 			y := int64(*t.Year)
 			in.Year = &y
@@ -352,7 +372,7 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 			case refIMDB:
 				in.IMDB = normalizeIMDB(v)
 			case refTMDB:
-				in.TMDB = normalizeTMDB(v)
+				in.TMDB = normalizeTMDB(typ, v)
 			case refWikidata:
 				in.Wikidata = normalizeWikidata(v)
 			}
@@ -365,6 +385,7 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 		if found {
 			stats.MoviesMatched++
 			upd := MovieInput{
+				Type:     m.Type,
 				Title:    m.Title,
 				Year:     cmpOr(m.Year, in.Year),
 				IMDB:     cmpOr(m.ImdbID, in.IMDB),
@@ -386,7 +407,7 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 			return stats, err
 		}
 		for _, r := range t.Entries {
-			v := localdb.CreateViewingParams{MovieID: m.ID}
+			v := localdb.CreateViewingParams{MovieID: m.ID, Season: int64Of(r.Season), Episode: int64Of(r.Episode)}
 			if r.Date != nil && *r.Date != "" {
 				v.ViewedOn = r.Date
 			}
@@ -414,27 +435,35 @@ func (c *Collection) mergeItems(ctx context.Context, items []ratingset.Item) (Im
 }
 
 func sameViewing(e localdb.Viewing, v localdb.CreateViewingParams) bool {
-	return ptrEq(e.ViewedOn, v.ViewedOn) && ptrEq(e.Rating, v.Rating) && e.Review == v.Review
+	return ptrEq(e.ViewedOn, v.ViewedOn) && ptrEq(e.Rating, v.Rating) && e.Review == v.Review &&
+		ptrEq(e.Season, v.Season) && ptrEq(e.Episode, v.Episode)
 }
 
-// findMovie looks up an existing movie for in by external ids (in the
-// spec's preference order: IMDb, Wikidata, TMDB), then by title and
-// year. Following the ratingset spec's matching rule, a candidate whose
+// findMovie looks up an existing movie of in's type for in by external
+// ids (in the spec's preference order: IMDb, Wikidata, TMDB), then by
+// title and year. Items of different types never match. Following the ratingset spec's matching rule, a candidate whose
 // ids conflict with in's (a shared ref key with a different value) is
 // never a match: the two are kept apart.
 func findMovie(ctx context.Context, q *localdb.Queries, in MovieInput) (localdb.Movie, bool, error) {
+	typ := in.typ()
 	lookups := []func() (localdb.Movie, error){}
 	if in.IMDB != nil {
-		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByIMDB(ctx, in.IMDB) })
+		lookups = append(lookups, func() (localdb.Movie, error) {
+			return q.FindMovieByIMDB(ctx, localdb.FindMovieByIMDBParams{Type: typ, ImdbID: in.IMDB})
+		})
 	}
 	if in.Wikidata != nil {
-		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByWikidata(ctx, in.Wikidata) })
+		lookups = append(lookups, func() (localdb.Movie, error) {
+			return q.FindMovieByWikidata(ctx, localdb.FindMovieByWikidataParams{Type: typ, WikidataID: in.Wikidata})
+		})
 	}
 	if in.TMDB != nil {
-		lookups = append(lookups, func() (localdb.Movie, error) { return q.FindMovieByTMDB(ctx, in.TMDB) })
+		lookups = append(lookups, func() (localdb.Movie, error) {
+			return q.FindMovieByTMDB(ctx, localdb.FindMovieByTMDBParams{Type: typ, TmdbID: in.TMDB})
+		})
 	}
 	lookups = append(lookups, func() (localdb.Movie, error) {
-		return q.FindMovieByTitleYear(ctx, localdb.FindMovieByTitleYearParams{Title: in.Title, Year: in.Year})
+		return q.FindMovieByTitleYear(ctx, localdb.FindMovieByTitleYearParams{Type: typ, Title: in.Title, Year: in.Year})
 	})
 
 	for _, lookup := range lookups {

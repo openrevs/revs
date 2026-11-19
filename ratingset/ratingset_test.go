@@ -72,6 +72,16 @@ func TestItemValidate(t *testing.T) {
 		`{"entries":[{"rating":7.5}],"title":"Rocky","type":"movie"}`:        false,
 		`{"id":"x","title":"Rocky","type":"movie"}`:                          false,
 		`[1]`: false,
+		// TV series: season and episode, only on tv items.
+		`{"entries":[{"date":"2015-03-01","rating":9,"season":1},{"rating":8}],"title":"Fargo","type":"tv","year":2014}`: true,
+		`{"entries":[{"episode":3,"season":0}],"title":"Fargo","type":"TV"}`:                                             true,
+		`{"entries":[{"season":1}],"title":"Fargo","type":"movie"}`:                                                      false,
+		`{"entries":[{"episode":1,"season":1}],"title":"Fargo","type":"movie"}`:                                          false,
+		`{"entries":[{"episode":2}],"title":"Fargo","type":"tv"}`:                                                        false, // episode without season
+		`{"entries":[{"season":-1}],"title":"Fargo","type":"tv"}`:                                                        false,
+		`{"entries":[{"episode":0,"season":1}],"title":"Fargo","type":"tv"}`:                                             false,
+		`{"entries":[{"season":1.5}],"title":"Fargo","type":"tv"}`:                                                       false,
+		`{"entries":[{"season":"1"}],"title":"Fargo","type":"tv"}`:                                                       false,
 	}
 	for line, want := range cases {
 		it, err := ParseItemLine([]byte(line))
@@ -95,6 +105,11 @@ func TestEncodeLine(t *testing.T) {
 	line, err := EncodeLine(it.Normalize())
 	assert.NoError(t, err)
 	assert.Equal(t, `{"entries":[{"date":"1997-07-07","rating":9,"review":"Tom & Jerry <3 Amélie"},{}],"refs":{"imdb":"tt0110912","wikidata":"Q104123"},"title":"Amélie","type":"movie","year":1994}`, string(line))
+
+	s1, e2 := 1, 2
+	line, err = EncodeLine(Item{Type: ItemTypeTV, Title: "Fargo", Entries: []Entry{{Date: &d, Episode: &e2, Rating: &r, Review: &rv, Season: &s1}}})
+	assert.NoError(t, err)
+	assert.Equal(t, `{"entries":[{"date":"1997-07-07","episode":2,"rating":9,"review":"Tom & Jerry <3 Amélie","season":1}],"title":"Fargo","type":"tv"}`, string(line))
 
 	line, err = EncodeLine(Author{ID: "abc", MinRating: 0, MaxRating: 10, Revision: 4})
 	assert.NoError(t, err)

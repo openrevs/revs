@@ -17,7 +17,7 @@ func TestStockMovies(t *testing.T) {
 		require.NotEmpty(t, m.Title, m.ID)
 		require.Equal(t, m.ID, Deref(normalizeWikidata(m.ID)), m.Title)
 		require.Equal(t, *m.IMDB, Deref(normalizeIMDB(*m.IMDB)), m.Title)
-		require.Equal(t, *m.TMDB, Deref(normalizeTMDB(*m.TMDB)), m.Title)
+		require.Equal(t, *m.TMDB, Deref(normalizeTMDB(TypeMovie, *m.TMDB)), m.Title)
 		require.False(t, seen[m.ID], "duplicate %s", m.ID)
 		seen[m.ID] = true
 	}

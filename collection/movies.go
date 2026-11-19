@@ -23,10 +23,11 @@ var (
 
 // ---- movies ----
 
-// Movies lists movies whose title contains query (all when empty),
-// with viewing summaries.
-func (c *Collection) Movies(ctx context.Context, query string) ([]localdb.ListMoviesRow, error) {
-	return c.q.ListMovies(ctx, strings.TrimSpace(query))
+// Movies lists movies and TV series whose title contains query (all
+// when empty), with viewing summaries. typ, TypeMovie or TypeTV,
+// limits the list to one type; empty lists both.
+func (c *Collection) Movies(ctx context.Context, query, typ string) ([]localdb.ListMoviesRow, error) {
+	return c.q.ListMovies(ctx, localdb.ListMoviesParams{Query: strings.TrimSpace(query), Type: typ})
 }
 
 // MovieSummary is one movie as Movies lists it, with its viewing
@@ -36,7 +37,7 @@ func (c *Collection) MovieSummary(ctx context.Context, id int64) (localdb.ListMo
 	if err != nil {
 		return localdb.ListMoviesRow{}, err
 	}
-	rows, err := c.q.ListMovies(ctx, m.Title)
+	rows, err := c.q.ListMovies(ctx, localdb.ListMoviesParams{Query: m.Title, Type: m.Type})
 	if err != nil {
 		return localdb.ListMoviesRow{}, err
 	}
@@ -53,7 +54,7 @@ func (c *Collection) AllMovies(ctx context.Context) ([]localdb.Movie, error) {
 	return c.q.AllMovies(ctx)
 }
 
-// Counts returns how many movies and viewings there are.
+// Counts returns how many movies, TV series, and viewings there are.
 func (c *Collection) Counts(ctx context.Context) (localdb.CountMoviesAndViewingsRow, error) {
 	return c.q.CountMoviesAndViewings(ctx)
 }
@@ -63,12 +64,12 @@ func (c *Collection) Movie(ctx context.Context, id int64) (localdb.Movie, error)
 	return m, notFound(err)
 }
 
-// AddMovie adds a movie. The same Wikidata item added twice is almost
-// surely a mistake, so if one is already present it is returned instead
-// with existed set.
+// AddMovie adds a movie or TV series. The same Wikidata item added
+// twice is almost surely a mistake, so if one is already present it is
+// returned instead with existed set.
 func (c *Collection) AddMovie(ctx context.Context, in MovieInput) (m localdb.Movie, existed bool, err error) {
 	if in.Wikidata != nil {
-		m, err := c.q.FindMovieByWikidata(ctx, in.Wikidata)
+		m, err := c.q.FindMovieByWikidata(ctx, localdb.FindMovieByWikidataParams{Type: in.typ(), WikidataID: in.Wikidata})
 		if err == nil {
 			return m, true, nil
 		}
@@ -80,9 +81,25 @@ func (c *Collection) AddMovie(ctx context.Context, in MovieInput) (m localdb.Mov
 	return m, false, err
 }
 
+// ErrHasSeasons is returned by UpdateMovie for a TV series with season
+// or episode viewings that would become a movie, which can't have them.
+var ErrHasSeasons = errors.New("this series has viewings of seasons or episodes; a movie can't have those, so edit or delete them first")
+
+// UpdateMovie changes a movie's details, including whether it is a
+// movie or a TV series.
 func (c *Collection) UpdateMovie(ctx context.Context, id int64, in MovieInput) error {
-	if _, err := c.Movie(ctx, id); err != nil {
+	m, err := c.Movie(ctx, id)
+	if err != nil {
 		return err
+	}
+	if m.Type == TypeTV && in.typ() != TypeTV {
+		n, err := c.q.CountSeasonViewings(ctx, id)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrHasSeasons
+		}
 	}
 	return c.q.UpdateMovie(ctx, in.updateParams(id))
 }
@@ -97,7 +114,8 @@ func (c *Collection) DeleteMovie(ctx context.Context, id int64) error {
 
 // ---- viewings ----
 
-// Viewings lists a movie's viewings, newest first, undated last.
+// Viewings lists a movie's viewings, newest first, undated last. For a
+// TV series, that includes its viewings of seasons and episodes.
 func (c *Collection) Viewings(ctx context.Context, movieID int64) ([]localdb.Viewing, error) {
 	return c.q.ListViewingsForMovie(ctx, movieID)
 }
@@ -112,28 +130,55 @@ func (c *Collection) Viewing(ctx context.Context, id int64) (localdb.Viewing, er
 	return v, notFound(err)
 }
 
+// AddViewing adds a viewing of a movie. Only a TV series's viewings may
+// have a season or episode.
 func (c *Collection) AddViewing(ctx context.Context, movieID int64, in ViewingInput) (localdb.Viewing, error) {
-	if _, err := c.Movie(ctx, movieID); err != nil {
+	m, err := c.Movie(ctx, movieID)
+	if err != nil {
+		return localdb.Viewing{}, err
+	}
+	if err := in.check(m); err != nil {
 		return localdb.Viewing{}, err
 	}
 	return c.q.CreateViewing(ctx, localdb.CreateViewingParams{
-		MovieID: movieID, ViewedOn: in.Date, Rating: in.Rating, Review: in.Review,
+		MovieID: movieID, ViewedOn: in.Date, Rating: in.Rating, Review: in.Review, Season: in.Season, Episode: in.Episode,
 	})
 }
 
 func (c *Collection) UpdateViewing(ctx context.Context, id int64, in ViewingInput) error {
-	if _, err := c.Viewing(ctx, id); err != nil {
+	v, err := c.Viewing(ctx, id)
+	if err != nil {
+		return err
+	}
+	m, err := c.Movie(ctx, v.MovieID)
+	if err != nil {
+		return err
+	}
+	if err := in.check(m); err != nil {
 		return err
 	}
 	return c.q.UpdateViewing(ctx, localdb.UpdateViewingParams{
-		ViewedOn: in.Date, Rating: in.Rating, Review: in.Review, ID: id,
+		ViewedOn: in.Date, Rating: in.Rating, Review: in.Review, Season: in.Season, Episode: in.Episode, ID: id,
 	})
 }
 
-// SetRating is the one-step way to rate a movie: it sets the rating
-// (in half stars) on the movie's latest viewing, keeping its date and
-// review, or, when the movie has no viewings yet, adds one dated today.
-// It reports whether it added a viewing.
+// LatestWhole returns the newest of vs (as Viewings orders them) that
+// is about the whole item rather than one season or episode: for a
+// movie, simply the newest. Its rating is the item's rating.
+func LatestWhole(vs []localdb.Viewing) (localdb.Viewing, bool) {
+	for _, v := range vs {
+		if v.Season == nil {
+			return v, true
+		}
+	}
+	return localdb.Viewing{}, false
+}
+
+// SetRating is the one-step way to rate a movie or TV series: it sets
+// the rating (in half stars) on its latest viewing of the whole item
+// (see LatestWhole), keeping its date and review, or, when there is
+// none yet, adds one dated today. It reports whether it added a
+// viewing.
 func (c *Collection) SetRating(ctx context.Context, movieID int64, rating int64) (v localdb.Viewing, added bool, err error) {
 	if rating < MinUserRating || rating > MaxRating {
 		return v, false, errStars
@@ -142,15 +187,15 @@ func (c *Collection) SetRating(ctx context.Context, movieID int64, rating int64)
 	if err != nil {
 		return v, false, err
 	}
-	if len(vs) == 0 {
+	v, ok := LatestWhole(vs)
+	if !ok {
 		today := time.Now().Format(DateLayout)
 		v, err = c.AddViewing(ctx, movieID, ViewingInput{Date: &today, Rating: &rating})
 		return v, err == nil, err
 	}
-	v = vs[0] // newest first
 	v.Rating = &rating
 	err = c.q.UpdateViewing(ctx, localdb.UpdateViewingParams{
-		ViewedOn: v.ViewedOn, Rating: v.Rating, Review: v.Review, ID: v.ID,
+		ViewedOn: v.ViewedOn, Rating: v.Rating, Review: v.Review, Season: v.Season, Episode: v.Episode, ID: v.ID,
 	})
 	return v, false, err
 }
@@ -169,7 +214,7 @@ func (c *Collection) History(ctx context.Context, limit int64) ([]localdb.Histor
 
 // ---- search ----
 
-// Search looks up movies to add. Matches from the built-in stock list
+// Search looks up movies and TV series to add. Matches from the built-in stock list
 // come first, followed by any other Wikidata hits. A Wikidata failure
 // (e.g. when offline) is returned as a message to show alongside
 // whatever the stock list found, never as an error.
@@ -205,17 +250,19 @@ func (c *Collection) Search(ctx context.Context, q string) ([]SearchResult, stri
 
 // ---- others' reviews ----
 
-// OtherReview is someone else's review of a movie, from a server
-// (ServerID).
+// OtherReview is someone else's review of a movie or TV series (or one
+// of its seasons or episodes), from a server (ServerID).
 type OtherReview struct {
 	localdb.MatchingReviewsRow
 }
 
 // OthersReviews collects pulled reviews of m from every server, with
-// reviews seen on several servers listed once.
+// reviews seen on several servers listed once. Only items of m's type
+// match.
 func (c *Collection) OthersReviews(ctx context.Context, m localdb.Movie) ([]OtherReview, error) {
 	rows, err := c.q.MatchingReviews(ctx, localdb.MatchingReviewsParams{
 		ExcludeUser: c.UserID(ctx),
+		Type:        m.Type,
 		WikidataID:  m.WikidataID,
 		ImdbID:      m.ImdbID,
 		TmdbID:      m.TmdbID,
@@ -229,7 +276,7 @@ func (c *Collection) OthersReviews(ctx context.Context, m localdb.Movie) ([]Othe
 	var out []OtherReview
 	seen := map[string]bool{}
 	for _, row := range rows {
-		k := fmt.Sprintf("%s|%s|%d|%s", row.Userid, Deref(row.ViewedOn), Deref(row.Rating), row.Comment)
+		k := fmt.Sprintf("%s|%s|%d|%s|%s", row.Userid, Deref(row.ViewedOn), Deref(row.Rating), PartName(row.Season, row.Episode), row.Comment)
 		if seen[k] {
 			continue
 		}

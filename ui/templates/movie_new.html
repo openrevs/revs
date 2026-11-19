@@ -1,9 +1,9 @@
 {{define "content"}}{{with .Data}}
-<h1>Add a movie</h1>
+<h1>Add a movie or TV series</h1>
 <section>
   <h2>Find it on Wikidata</h2>
   <form class="search" method="get" action="/movies/new">
-    <input type="search" name="q" value="{{.Query}}" placeholder="Movie title" autofocus>
+    <input type="search" name="q" value="{{.Query}}" placeholder="Movie or series title" autofocus>
     <button type="submit">Search</button>
   </form>
   {{template "wikidata-results" (dict "Query" .Query "Results" .Results "SearchErr" .SearchErr "Action" "/movies" "Button" "Add" "Rate" true "Next" .Next "Ratings" .Ratings)}}
@@ -12,7 +12,7 @@
   <h2>Or enter it yourself</h2>
   <form method="post" action="/movies" class="stack">
     {{template "movie-fields" .Form}}
-    <div><button type="submit" class="primary">Add movie</button></div>
+    <div><button type="submit" class="primary">Add</button></div>
   </form>
 </section>
 {{end}}{{end}}

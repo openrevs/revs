@@ -66,7 +66,7 @@ func (q *Queries) GetIndexedUser(ctx context.Context, arg GetIndexedUserParams) 
 }
 
 const insertIndexedReview = `-- name: InsertIndexedReview :exec
-INSERT INTO idx_reviews (title_id, viewed_on, rating, comment) VALUES (?, ?, ?, ?)
+INSERT INTO idx_reviews (title_id, viewed_on, rating, comment, season, episode) VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertIndexedReviewParams struct {
@@ -74,6 +74,8 @@ type InsertIndexedReviewParams struct {
 	ViewedOn *string
 	Rating   *int64
 	Comment  string
+	Season   *int64
+	Episode  *int64
 }
 
 func (q *Queries) InsertIndexedReview(ctx context.Context, arg InsertIndexedReviewParams) error {
@@ -82,19 +84,22 @@ func (q *Queries) InsertIndexedReview(ctx context.Context, arg InsertIndexedRevi
 		arg.ViewedOn,
 		arg.Rating,
 		arg.Comment,
+		arg.Season,
+		arg.Episode,
 	)
 	return err
 }
 
 const insertIndexedTitle = `-- name: InsertIndexedTitle :one
-INSERT INTO idx_titles (server_id, userid, name, year, imdb_id, tmdb_id, wikidata_id)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO idx_titles (server_id, userid, type, name, year, imdb_id, tmdb_id, wikidata_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
 type InsertIndexedTitleParams struct {
 	ServerID   int64
 	Userid     string
+	Type       string
 	Name       string
 	Year       *int64
 	ImdbID     *string
@@ -106,6 +111,7 @@ func (q *Queries) InsertIndexedTitle(ctx context.Context, arg InsertIndexedTitle
 	row := q.db.QueryRowContext(ctx, insertIndexedTitle,
 		arg.ServerID,
 		arg.Userid,
+		arg.Type,
 		arg.Name,
 		arg.Year,
 		arg.ImdbID,
@@ -174,8 +180,8 @@ func (q *Queries) ListIndexedUsers(ctx context.Context, serverID int64) ([]IdxUs
 }
 
 const listUserReviews = `-- name: ListUserReviews :many
-SELECT t.id AS title_id, t.name, t.year, t.imdb_id, t.tmdb_id, t.wikidata_id,
-       r.viewed_on, r.rating, r.comment
+SELECT t.id AS title_id, t.type, t.name, t.year, t.imdb_id, t.tmdb_id, t.wikidata_id,
+       r.viewed_on, r.rating, r.comment, r.season, r.episode
 FROM idx_titles t
 LEFT JOIN idx_reviews r ON r.title_id = t.id
 WHERE t.server_id = ? AND t.userid = ?
@@ -189,6 +195,7 @@ type ListUserReviewsParams struct {
 
 type ListUserReviewsRow struct {
 	TitleID    int64
+	Type       string
 	Name       string
 	Year       *int64
 	ImdbID     *string
@@ -197,6 +204,8 @@ type ListUserReviewsRow struct {
 	ViewedOn   *string
 	Rating     *int64
 	Comment    *string
+	Season     *int64
+	Episode    *int64
 }
 
 func (q *Queries) ListUserReviews(ctx context.Context, arg ListUserReviewsParams) ([]ListUserReviewsRow, error) {
@@ -210,6 +219,7 @@ func (q *Queries) ListUserReviews(ctx context.Context, arg ListUserReviewsParams
 		var i ListUserReviewsRow
 		if err := rows.Scan(
 			&i.TitleID,
+			&i.Type,
 			&i.Name,
 			&i.Year,
 			&i.ImdbID,
@@ -218,6 +228,8 @@ func (q *Queries) ListUserReviews(ctx context.Context, arg ListUserReviewsParams
 			&i.ViewedOn,
 			&i.Rating,
 			&i.Comment,
+			&i.Season,
+			&i.Episode,
 		); err != nil {
 			return nil, err
 		}
@@ -233,22 +245,24 @@ func (q *Queries) ListUserReviews(ctx context.Context, arg ListUserReviewsParams
 }
 
 const matchingReviews = `-- name: MatchingReviews :many
-SELECT t.server_id, t.userid, t.name, t.year, r.viewed_on, r.rating, r.comment
+SELECT t.server_id, t.userid, t.name, t.year, r.viewed_on, r.rating, r.comment, r.season, r.episode
 FROM idx_titles t
 JOIN idx_reviews r ON r.title_id = t.id
 WHERE t.userid != ?1
-  AND ((CAST(?2 AS TEXT) IS NOT NULL AND t.wikidata_id = CAST(?2 AS TEXT))
-    OR (CAST(?3 AS TEXT) IS NOT NULL AND t.imdb_id = CAST(?3 AS TEXT))
-    OR (CAST(?4 AS TEXT) IS NOT NULL AND t.tmdb_id = CAST(?4 AS TEXT))
-    OR (t.name = ?5 COLLATE NOCASE AND t.year IS ?6))
-  AND (t.wikidata_id IS NULL OR CAST(?2 AS TEXT) IS NULL OR t.wikidata_id = CAST(?2 AS TEXT))
-  AND (t.imdb_id IS NULL OR CAST(?3 AS TEXT) IS NULL OR t.imdb_id = CAST(?3 AS TEXT))
-  AND (t.tmdb_id IS NULL OR CAST(?4 AS TEXT) IS NULL OR t.tmdb_id = CAST(?4 AS TEXT))
+  AND t.type = ?2
+  AND ((CAST(?3 AS TEXT) IS NOT NULL AND t.wikidata_id = CAST(?3 AS TEXT))
+    OR (CAST(?4 AS TEXT) IS NOT NULL AND t.imdb_id = CAST(?4 AS TEXT))
+    OR (CAST(?5 AS TEXT) IS NOT NULL AND t.tmdb_id = CAST(?5 AS TEXT))
+    OR (t.name = ?6 COLLATE NOCASE AND t.year IS ?7))
+  AND (t.wikidata_id IS NULL OR CAST(?3 AS TEXT) IS NULL OR t.wikidata_id = CAST(?3 AS TEXT))
+  AND (t.imdb_id IS NULL OR CAST(?4 AS TEXT) IS NULL OR t.imdb_id = CAST(?4 AS TEXT))
+  AND (t.tmdb_id IS NULL OR CAST(?5 AS TEXT) IS NULL OR t.tmdb_id = CAST(?5 AS TEXT))
 ORDER BY t.server_id, r.viewed_on IS NULL, r.viewed_on DESC
 `
 
 type MatchingReviewsParams struct {
 	ExcludeUser string
+	Type        string
 	WikidataID  *string
 	ImdbID      *string
 	TmdbID      *string
@@ -264,15 +278,19 @@ type MatchingReviewsRow struct {
 	ViewedOn *string
 	Rating   *int64
 	Comment  string
+	Season   *int64
+	Episode  *int64
 }
 
-// Other users' reviews of a title, from every server: matched by any
-// shared external id, or by exact title (case-insensitive) and year.
+// Other users' reviews of a title, from every server: titles of the
+// same type, matched by any shared external id, or by exact title
+// (case-insensitive) and year.
 // Titles whose ids conflict (a shared id with a different value) never
 // match, per the ratingset spec.
 func (q *Queries) MatchingReviews(ctx context.Context, arg MatchingReviewsParams) ([]MatchingReviewsRow, error) {
 	rows, err := q.db.QueryContext(ctx, matchingReviews,
 		arg.ExcludeUser,
+		arg.Type,
 		arg.WikidataID,
 		arg.ImdbID,
 		arg.TmdbID,
@@ -294,6 +312,8 @@ func (q *Queries) MatchingReviews(ctx context.Context, arg MatchingReviewsParams
 			&i.ViewedOn,
 			&i.Rating,
 			&i.Comment,
+			&i.Season,
+			&i.Episode,
 		); err != nil {
 			return nil, err
 		}

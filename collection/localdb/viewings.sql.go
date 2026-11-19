@@ -10,7 +10,7 @@ import (
 )
 
 const allViewings = `-- name: AllViewings :many
-SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at FROM viewings ORDER BY movie_id, viewed_on, id
+SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at, season, episode FROM viewings ORDER BY movie_id, viewed_on, id
 `
 
 func (q *Queries) AllViewings(ctx context.Context) ([]Viewing, error) {
@@ -30,6 +30,8 @@ func (q *Queries) AllViewings(ctx context.Context) ([]Viewing, error) {
 			&i.Review,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Season,
+			&i.Episode,
 		); err != nil {
 			return nil, err
 		}
@@ -45,26 +47,39 @@ func (q *Queries) AllViewings(ctx context.Context) ([]Viewing, error) {
 }
 
 const countMoviesAndViewings = `-- name: CountMoviesAndViewings :one
-SELECT (SELECT COUNT(*) FROM movies) AS movies,
+SELECT (SELECT COUNT(*) FROM movies WHERE type = 'movie') AS movies,
+       (SELECT COUNT(*) FROM movies WHERE type = 'tv') AS series,
        (SELECT COUNT(*) FROM viewings) AS viewings
 `
 
 type CountMoviesAndViewingsRow struct {
 	Movies   int64
+	Series   int64
 	Viewings int64
 }
 
 func (q *Queries) CountMoviesAndViewings(ctx context.Context) (CountMoviesAndViewingsRow, error) {
 	row := q.db.QueryRowContext(ctx, countMoviesAndViewings)
 	var i CountMoviesAndViewingsRow
-	err := row.Scan(&i.Movies, &i.Viewings)
+	err := row.Scan(&i.Movies, &i.Series, &i.Viewings)
 	return i, err
 }
 
+const countSeasonViewings = `-- name: CountSeasonViewings :one
+SELECT COUNT(*) FROM viewings WHERE movie_id = ? AND season IS NOT NULL
+`
+
+func (q *Queries) CountSeasonViewings(ctx context.Context, movieID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSeasonViewings, movieID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createViewing = `-- name: CreateViewing :one
-INSERT INTO viewings (movie_id, viewed_on, rating, review)
-VALUES (?, ?, ?, ?)
-RETURNING id, movie_id, viewed_on, rating, review, created_at, updated_at
+INSERT INTO viewings (movie_id, viewed_on, rating, review, season, episode)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id, movie_id, viewed_on, rating, review, created_at, updated_at, season, episode
 `
 
 type CreateViewingParams struct {
@@ -72,6 +87,8 @@ type CreateViewingParams struct {
 	ViewedOn *string
 	Rating   *int64
 	Review   string
+	Season   *int64
+	Episode  *int64
 }
 
 func (q *Queries) CreateViewing(ctx context.Context, arg CreateViewingParams) (Viewing, error) {
@@ -80,6 +97,8 @@ func (q *Queries) CreateViewing(ctx context.Context, arg CreateViewingParams) (V
 		arg.ViewedOn,
 		arg.Rating,
 		arg.Review,
+		arg.Season,
+		arg.Episode,
 	)
 	var i Viewing
 	err := row.Scan(
@@ -90,6 +109,8 @@ func (q *Queries) CreateViewing(ctx context.Context, arg CreateViewingParams) (V
 		&i.Review,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Season,
+		&i.Episode,
 	)
 	return i, err
 }
@@ -104,7 +125,7 @@ func (q *Queries) DeleteViewing(ctx context.Context, id int64) error {
 }
 
 const getViewing = `-- name: GetViewing :one
-SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at FROM viewings WHERE id = ?
+SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at, season, episode FROM viewings WHERE id = ?
 `
 
 func (q *Queries) GetViewing(ctx context.Context, id int64) (Viewing, error) {
@@ -118,12 +139,14 @@ func (q *Queries) GetViewing(ctx context.Context, id int64) (Viewing, error) {
 		&i.Review,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Season,
+		&i.Episode,
 	)
 	return i, err
 }
 
 const history = `-- name: History :many
-SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, m.title, m.year
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, m.title, m.year, m.type
 FROM viewings v
 JOIN movies m ON m.id = v.movie_id
 ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.id DESC
@@ -136,8 +159,11 @@ type HistoryRow struct {
 	ViewedOn *string
 	Rating   *int64
 	Review   string
+	Season   *int64
+	Episode  *int64
 	Title    string
 	Year     *int64
+	Type     string
 }
 
 func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error) {
@@ -155,8 +181,11 @@ func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error
 			&i.ViewedOn,
 			&i.Rating,
 			&i.Review,
+			&i.Season,
+			&i.Episode,
 			&i.Title,
 			&i.Year,
+			&i.Type,
 		); err != nil {
 			return nil, err
 		}
@@ -172,7 +201,7 @@ func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error
 }
 
 const listViewingsForMovie = `-- name: ListViewingsForMovie :many
-SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at FROM viewings
+SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at, season, episode FROM viewings
 WHERE movie_id = ?
 ORDER BY viewed_on IS NULL, viewed_on DESC, id DESC
 `
@@ -194,6 +223,8 @@ func (q *Queries) ListViewingsForMovie(ctx context.Context, movieID int64) ([]Vi
 			&i.Review,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Season,
+			&i.Episode,
 		); err != nil {
 			return nil, err
 		}
@@ -210,7 +241,7 @@ func (q *Queries) ListViewingsForMovie(ctx context.Context, movieID int64) ([]Vi
 
 const updateViewing = `-- name: UpdateViewing :exec
 UPDATE viewings
-SET viewed_on = ?, rating = ?, review = ?,
+SET viewed_on = ?, rating = ?, review = ?, season = ?, episode = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 `
@@ -219,6 +250,8 @@ type UpdateViewingParams struct {
 	ViewedOn *string
 	Rating   *int64
 	Review   string
+	Season   *int64
+	Episode  *int64
 	ID       int64
 }
 
@@ -227,6 +260,8 @@ func (q *Queries) UpdateViewing(ctx context.Context, arg UpdateViewingParams) er
 		arg.ViewedOn,
 		arg.Rating,
 		arg.Review,
+		arg.Season,
+		arg.Episode,
 		arg.ID,
 	)
 	return err

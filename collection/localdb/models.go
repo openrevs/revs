@@ -10,6 +10,8 @@ type IdxReview struct {
 	ViewedOn *string
 	Rating   *int64
 	Comment  string
+	Season   *int64
+	Episode  *int64
 }
 
 type IdxTitle struct {
@@ -21,6 +23,7 @@ type IdxTitle struct {
 	ImdbID     *string
 	TmdbID     *string
 	WikidataID *string
+	Type       string
 }
 
 type IdxUser struct {
@@ -40,6 +43,7 @@ type Movie struct {
 	WikidataID *string
 	CreatedAt  string
 	UpdatedAt  string
+	Type       string
 }
 
 type Server struct {
@@ -66,4 +70,6 @@ type Viewing struct {
 	Review    string
 	CreatedAt string
 	UpdatedAt string
+	Season    *int64
+	Episode   *int64
 }

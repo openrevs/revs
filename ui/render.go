@@ -47,16 +47,18 @@ func parsePages() (pages, error) {
 }
 
 var funcs = template.FuncMap{
-	"stars":   collection.Stars,
-	"deref":   derefAny,
-	"short":   collection.ShortID,
-	"imdbURL": func(id string) string { return collection.IMDBURL(url.PathEscape(id)) },
-	"tmdbURL": func(id string) string { return collection.TMDBURL(url.PathEscape(id)) },
-	"wdURL":   func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
-	"today":   func() string { return time.Now().Format(collection.DateLayout) },
-	"starbar": starSteps,
-	"timeAgo": collection.TimeAgo,
-	"dict":    dict,
+	"stars":    collection.Stars,
+	"deref":    derefAny,
+	"short":    collection.ShortID,
+	"imdbURL":  func(id string) string { return collection.IMDBURL(url.PathEscape(id)) },
+	"tmdbURL":  func(typ, id string) string { return collection.TMDBURL(typ, url.PathEscape(id)) },
+	"typeName": collection.TypeName,
+	"part":     collection.PartName,
+	"wdURL":    func(id string) string { return collection.WikidataURL(url.PathEscape(id)) },
+	"today":    func() string { return time.Now().Format(collection.DateLayout) },
+	"starbar":  starSteps,
+	"timeAgo":  collection.TimeAgo,
+	"dict":     dict,
 }
 
 // dict builds a map from alternating keys and values, for passing

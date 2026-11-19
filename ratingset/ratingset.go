@@ -77,8 +77,11 @@ type Author struct {
 	Revision  int    `json:"revision,omitempty"`
 }
 
-// ItemTypeMovie is the only item type defined so far.
-const ItemTypeMovie = "movie"
+// The item types defined so far.
+const (
+	ItemTypeMovie = "movie" // a film, including a TV movie
+	ItemTypeTV    = "tv"    // a TV series, as a whole
+)
 
 // Item is a ratingset's item line: one item and the author's entries
 // for it.
@@ -91,11 +94,15 @@ type Item struct {
 }
 
 // Entry is one occasion of the author engaging with an item, such as
-// one viewing of a movie.
+// one viewing of a movie. On a tv item, Season and Episode say which
+// part of the series the entry is about; with neither, it is about the
+// series as a whole.
 type Entry struct {
-	Date   *string `json:"date,omitempty" yaml:",omitempty"`
-	Rating *int    `json:"rating,omitempty" yaml:",omitempty"`
-	Review *string `json:"review,omitempty" yaml:",omitempty"`
+	Date    *string `json:"date,omitempty" yaml:",omitempty"`
+	Episode *int    `json:"episode,omitempty" yaml:",omitempty"`
+	Rating  *int    `json:"rating,omitempty" yaml:",omitempty"`
+	Review  *string `json:"review,omitempty" yaml:",omitempty"`
+	Season  *int    `json:"season,omitempty" yaml:",omitempty"`
 }
 
 // ParseAuthorLine reads an author line. It must have a string id and a
@@ -156,6 +163,20 @@ func (it Item) Validate(minRating, maxRating int) error {
 		}
 		if e.Date != nil && !ValidDate(*e.Date) {
 			return fmt.Errorf("date %q is not a valid YYYY-MM-DD date", *e.Date)
+		}
+		if (e.Season != nil || e.Episode != nil) && !it.IsType(ItemTypeTV) {
+			return fmt.Errorf("season and episode are only allowed on %s items", ItemTypeTV)
+		}
+		if e.Season != nil && *e.Season < 0 {
+			return fmt.Errorf("season %d is negative", *e.Season)
+		}
+		if e.Episode != nil {
+			if e.Season == nil {
+				return errors.New("entry has an episode but no season")
+			}
+			if *e.Episode < 1 {
+				return fmt.Errorf("episode %d is less than 1", *e.Episode)
+			}
 		}
 	}
 	return nil

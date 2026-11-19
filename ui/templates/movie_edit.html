@@ -1,6 +1,6 @@
 {{define "content"}}{{with .Data}}
 <p class="crumbs"><a href="/movies/{{.Movie.ID}}">← {{.Movie.Title}}</a></p>
-<h1>Edit movie</h1>
+<h1>Edit {{if eq .Movie.Type "tv"}}series{{else}}movie{{end}}</h1>
 <form method="post" action="/movies/{{.Movie.ID}}" class="stack">
   {{template "movie-fields" .Form}}
   <div class="actions"><button type="submit" class="primary">Save</button> <a href="/movies/{{.Movie.ID}}">Cancel</a></div>
@@ -15,7 +15,7 @@
   {{template "wikidata-results" (dict "Query" .Query "Results" .Results "SearchErr" .SearchErr "Action" (print "/movies/" .Movie.ID) "Button" "Use")}}
 </section>
 <section class="danger">
-  <form method="post" action="/movies/{{.Movie.ID}}/delete" onsubmit="return confirm('Delete this movie and all its viewings?')">
+  <form method="post" action="/movies/{{.Movie.ID}}/delete" onsubmit="return confirm('Delete {{if eq .Movie.Type "tv"}}this series{{else}}this movie{{end}} and all its viewings?')">
     <button type="submit" class="danger">Delete <em>{{.Movie.Title}}</em></button>
   </form>
 </section>
