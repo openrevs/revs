@@ -34,7 +34,7 @@ func published(t *testing.T, network *revstest.Network, s *revstest.Server, uid 
 
 func titles(t *testing.T, c *collection.Collection) []string {
 	t.Helper()
-	movies, err := c.Movies(context.Background(), "")
+	movies, err := c.Movies(context.Background(), "", "")
 	require.NoError(t, err)
 	var names []string
 	for _, m := range movies {
@@ -103,7 +103,7 @@ func TestAdoptedIdentityPushMerges(t *testing.T) {
 
 		// Merged once: deleting the merged movie and pushing again
 		// doesn't bring it back.
-		movies, err := fresh.Movies(ctx, "Alien")
+		movies, err := fresh.Movies(ctx, "Alien", "")
 		require.NoError(t, err)
 		require.NoError(t, fresh.DeleteMovie(ctx, movies[0].ID))
 		_, err = fresh.Pull(ctx, id, false)
@@ -181,7 +181,7 @@ func TestPushDoesNotMergeOwnVersions(t *testing.T) {
 	_, err := author.Pull(ctx, id, false)
 	require.NoError(t, err)
 
-	movies, err := author.Movies(ctx, "")
+	movies, err := author.Movies(ctx, "", "")
 	require.NoError(t, err)
 	require.NoError(t, author.DeleteMovie(ctx, movies[0].ID))
 	_, _, err = author.AddMovie(ctx, collection.MovieInput{Title: "Brazil"})

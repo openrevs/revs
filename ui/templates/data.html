@@ -2,13 +2,13 @@
 <h1>Import &amp; export</h1>
 <section>
   <h2>Export</h2>
-  <p>Download your whole collection ({{.Counts.Movies}} movies, {{.Counts.Viewings}} viewings) as a signed sjsonl ratingset. This is the same document servers receive.</p>
+  <p>Download your whole collection ({{.Counts.Movies}} movies, {{.Counts.Series}} TV series, {{.Counts.Viewings}} viewings) as a signed sjsonl ratingset. This is the same document servers receive.</p>
   {{if .HasKey}}<a class="button primary" href="/export.jsonl">Download signed file</a>
   {{else}}<p class="muted">Exports are signed. <a href="/identity">Create or import a key</a> first.</p>{{end}}
 </section>
 <section>
   <h2>Import</h2>
-  <p>Merge a ratingset into your collection: a signed sjsonl file, or an unsigned one such as a <code>revs tui</code> <code>draft.jsonl</code>. Nothing is overwritten or deleted. Movies are matched by ID or by title and year, and viewings you already have are skipped.</p>
+  <p>Merge a ratingset into your collection: a signed sjsonl file, or an unsigned one such as a <code>revs tui</code> <code>draft.jsonl</code>. Nothing is overwritten or deleted. Movies and TV series are matched by ID or by title and year (a movie never matches a series), and viewings you already have are skipped.</p>
   <form method="post" action="/import" enctype="multipart/form-data" class="search">
     <input type="file" name="file" accept=".jsonl,.sjsonl,.json,application/jsonl" required>
     <button type="submit">Import</button>

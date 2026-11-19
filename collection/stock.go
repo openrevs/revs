@@ -39,6 +39,7 @@ func loadStockMovies() []stockMovie {
 	for i, r := range raw {
 		out[i] = stockMovie{
 			SearchResult: SearchResult{
+				Type:        TypeMovie,
 				ID:          r.ID,
 				Title:       r.Title,
 				Description: r.Description,

@@ -11,7 +11,7 @@
 <header class="top">
   <a class="brand" href="/movies">revs</a>
   <nav>
-    <a href="/movies"{{if eq .Nav "movies"}} class="active"{{end}}>Movies</a>
+    <a href="/movies"{{if eq .Nav "movies"}} class="active"{{end}}>Movies &amp; TV</a>
     <a href="/history"{{if eq .Nav "history"}} class="active"{{end}}>History</a>
     <a href="/servers"{{if eq .Nav "servers"}} class="active"{{end}}>Servers</a>
     <a href="/identity"{{if eq .Nav "identity"}} class="active"{{end}}>Identity</a>
@@ -51,13 +51,25 @@
      "mine" section. */}}
 {{define "rate"}}<form class="rate" method="post" action="{{.Action}}" data-on:submit="@post('{{.Action}}', {contentType: 'form'})"><input type="hidden" name="next" value="{{.Next}}">{{with .View}}<input type="hidden" name="view" value="{{.}}">{{end}}{{template "star-buttons" .Rating}}</form>{{end}}
 
+{{/* A viewing's fields. A TV series's viewing may name a season and
+     episode; with neither it is about the whole series. */}}
 {{define "viewing-fields"}}
+{{if .TV}}<div class="grid2">
+  <label>Season <input name="season" value="{{.Season}}" inputmode="numeric" size="4" placeholder="whole series"></label>
+  <label>Episode <input name="episode" value="{{.Episode}}" inputmode="numeric" size="4" placeholder="whole season"></label>
+</div>
+<p class="hint">Leave the season blank to review the whole series. Season 0 is specials.</p>{{end}}
 <label>Date watched <input type="date" name="viewed_on" value="{{.Date}}"></label>
 {{template "rating-input" .}}
 <label>Review <textarea name="review" rows="4" placeholder="Optional">{{.Review}}</textarea></label>
 {{end}}
 
 {{define "movie-fields"}}
+<fieldset class="choice">
+  <legend>Type</legend>
+  <label><input type="radio" name="type" value="movie"{{if ne .Type "tv"}} checked{{end}}> Movie</label>
+  <label><input type="radio" name="type" value="tv"{{if eq .Type "tv"}} checked{{end}}> TV series</label>
+</fieldset>
 <div class="grid2">
   <label>Title <input name="title" value="{{.Title}}" required></label>
   <label>Year <input name="year" value="{{.Year}}" inputmode="numeric" size="6"></label>
@@ -67,25 +79,27 @@
   <label>IMDb ID <input name="imdb_id" value="{{.IMDB}}" placeholder="tt0110912"></label>
   <label>TMDB ID <input name="tmdb_id" value="{{.TMDB}}" placeholder="680"></label>
 </div>
-<p class="hint">IDs may be pasted as full URLs.</p>
+<p class="hint">IDs may be pasted as full URLs. For a TV series, use the series's IDs, not a season's or episode's, and give the year it first aired.</p>
 {{end}}
 
 {{define "ext-links"}}
 {{with .WikidataID}}<a href="{{wdURL .}}" target="_blank" rel="noopener">Wikidata</a>{{end}}
 {{with .ImdbID}}<a href="{{imdbURL .}}" target="_blank" rel="noopener">IMDb</a>{{end}}
-{{with .TmdbID}}<a href="{{tmdbURL .}}" target="_blank" rel="noopener">TMDB</a>{{end}}
+{{with .TmdbID}}<a href="{{tmdbURL $.Type .}}" target="_blank" rel="noopener">TMDB</a>{{end}}
 {{end}}
 
-{{/* Wikidata results; each posts a movie form to .Action. */}}
+{{/* Wikidata results, movies and TV series; each posts a movie form
+     to .Action. */}}
 {{define "wikidata-results"}}
 {{if .SearchErr}}{{if .Results}}<p class="muted">Showing built-in matches only. Wikidata search failed: {{.SearchErr}}</p>
 {{else}}<p class="flash flash-error">Wikidata search failed: {{.SearchErr}} You can still enter the details yourself.</p>{{end}}{{end}}
-{{if .Query}}{{if not .Results}}{{if not .SearchErr}}<p class="muted">No films found on Wikidata for “{{.Query}}”.</p>{{end}}{{end}}{{end}}
+{{if .Query}}{{if not .Results}}{{if not .SearchErr}}<p class="muted">No movies or TV series found on Wikidata for “{{.Query}}”.</p>{{end}}{{end}}{{end}}
 {{if .Results}}
 <ul class="results{{if .Rate}} rateable{{end}}">
-{{range .Results}}
+{{range $r := .Results}}
   <li>
     <form method="post" action="{{$.Action}}"{{if $.Rate}} data-on:submit="@post('{{$.Action}}', {contentType: 'form'})"{{end}}>
+      <input type="hidden" name="type" value="{{.Type}}">
       <input type="hidden" name="title" value="{{.Title}}">
       <input type="hidden" name="year" value="{{with .Year}}{{.}}{{end}}">
       <input type="hidden" name="wikidata_id" value="{{.ID}}">
@@ -96,12 +110,12 @@
       {{if $.Rate}}{{template "result-rate" (dict "ID" .ID "Rating" (or (index $.Ratings .ID) -1))}}{{end}}
     </form>
     <div class="info">
-      <strong>{{.Title}}</strong>{{with .Year}} ({{.}}){{end}}
+      <strong>{{.Title}}</strong>{{with .Year}} ({{.}}){{end}}{{if eq .Type "tv"}} <span class="tag">TV series</span>{{end}}
       <div class="muted">{{.Description}}</div>
       <div class="links small">
         <a href="{{wdURL .ID}}" target="_blank" rel="noopener">{{.ID}}</a>
         {{with .IMDB}}<a href="{{imdbURL .}}" target="_blank" rel="noopener">{{.}}</a>{{end}}
-        {{with .TMDB}}<a href="{{tmdbURL .}}" target="_blank" rel="noopener">TMDB {{.}}</a>{{end}}
+        {{with .TMDB}}<a href="{{tmdbURL $r.Type .}}" target="_blank" rel="noopener">TMDB {{.}}</a>{{end}}
       </div>
     </div>
   </li>

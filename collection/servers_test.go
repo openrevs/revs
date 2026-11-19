@@ -147,3 +147,54 @@ func TestOthersReviewsConflictingRefs(t *testing.T) {
 	require.Len(t, reviews(collection.MovieInput{Title: "Alien (1979)", IMDB: ptr("tt0078748")}), 1, "shared id")
 	require.Empty(t, reviews(collection.MovieInput{Title: "Alien", Year: ptr[int64](1979), IMDB: ptr("tt0090605")}), "conflicting id")
 }
+
+// Pulled reviews of a TV series keep their seasons and episodes, and
+// match only series: a movie of the same title and year isn't the
+// same item.
+func TestOthersReviewsTV(t *testing.T) {
+	ctx := context.Background()
+	network := revstest.NewNetwork(t)
+	srv := network.NewServer()
+
+	author := network.NewAuthor()
+	m, _, err := author.AddMovie(ctx, collection.MovieInput{Type: collection.TypeTV, Title: "Fargo", Year: ptr[int64](2014)})
+	require.NoError(t, err)
+	_, err = author.AddViewing(ctx, m.ID, collection.ViewingInput{Rating: ptr[int64](9), Season: ptr[int64](1), Episode: ptr[int64](3), Review: "Great episode"})
+	require.NoError(t, err)
+	_, err = author.AddViewing(ctx, m.ID, collection.ViewingInput{Rating: ptr[int64](8)})
+	require.NoError(t, err)
+	s, err := author.AddServer(ctx, srv.URL)
+	require.NoError(t, err)
+	_, err = author.Push(ctx, s.ID)
+	require.NoError(t, err)
+	srv.Cut()
+
+	reader := network.NewAuthor()
+	rs, err := reader.AddServer(ctx, srv.URL)
+	require.NoError(t, err)
+	_, err = reader.Pull(ctx, rs.ID, false)
+	require.NoError(t, err)
+
+	film, _, err := reader.AddMovie(ctx, collection.MovieInput{Title: "Fargo", Year: ptr[int64](2014)})
+	require.NoError(t, err)
+	got, err := reader.OthersReviews(ctx, film)
+	require.NoError(t, err)
+	require.Empty(t, got, "a movie doesn't match a series")
+
+	series, _, err := reader.AddMovie(ctx, collection.MovieInput{Type: collection.TypeTV, Title: "Fargo", Year: ptr[int64](2014)})
+	require.NoError(t, err)
+	got, err = reader.OthersReviews(ctx, series)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	var parts []string
+	for _, r := range got {
+		parts = append(parts, collection.PartName(r.Season, r.Episode))
+	}
+	require.ElementsMatch(t, []string{"S1 E3", ""}, parts)
+
+	_, titles, err := reader.ServerUser(ctx, rs.ID, author.UserID(ctx))
+	require.NoError(t, err)
+	require.Len(t, titles, 1)
+	require.Equal(t, collection.TypeTV, titles[0].Type)
+	require.Len(t, titles[0].Reviews, 2)
+}

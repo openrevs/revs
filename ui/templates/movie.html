@@ -1,8 +1,8 @@
 {{define "content"}}{{with .Data}}
-<p class="crumbs"><a href="/movies">← Movies</a></p>
+<p class="crumbs"><a href="/movies">← Movies &amp; TV</a></p>
 <div class="heading">
-  <h1>{{.Mine.Movie.Title}}{{with .Mine.Movie.Year}} <span class="muted">({{.}})</span>{{end}}</h1>
-  <a class="button" href="/movies/{{.Mine.Movie.ID}}/edit">Edit movie</a>
+  <h1>{{.Mine.Movie.Title}}{{with .Mine.Movie.Year}} <span class="muted">({{.}})</span>{{end}}{{if .Mine.TV}} <span class="tag">TV series</span>{{end}}</h1>
+  <a class="button" href="/movies/{{.Mine.Movie.ID}}/edit">Edit {{if .Mine.TV}}series{{else}}movie{{end}}</a>
 </div>
 <p class="links">{{template "ext-links" .Mine.Movie}}</p>
 
@@ -16,6 +16,7 @@
     <li>
       <div class="vhead">
         <a class="mono" href="/servers/{{.ServerID}}/users/{{.Userid}}" title="{{.Userid}}">{{short .Userid}}</a>
+        {{with part .Season .Episode}}<span class="tag">{{.}}</span>{{end}}
         <span class="date">{{with .ViewedOn}}{{.}}{{end}}</span>
         <span class="stars">{{stars .Rating}}</span>
       </div>
@@ -29,11 +30,13 @@
 
 {{/* Your rating, viewings, and the forms to change them: everything on
      the page you can edit. Every change re-renders and patches this
-     whole section (see mineData in ui/handlers.go). */}}
+     whole section (see mineData in ui/handlers.go). A series's rating
+     is of the whole series; its seasons and episodes are rated in
+     their own viewings. */}}
 {{define "mine"}}
 <div id="mine">
 <div class="myrating">
-  <span class="muted">Your rating</span>
+  <span class="muted">Your rating{{if .TV}} of the series{{end}}</span>
   {{template "rate" (dict "Action" (printf "/movies/%d/rating" .Movie.ID) "Rating" .Rating "Next" (printf "/movies/%d" .Movie.ID))}}
 </div>
 
@@ -47,6 +50,7 @@
       {{template "viewing-form" (dict "Viewing" . "Form" $.EditForm "Err" $.EditErr)}}
     {{else}}
       <div class="vhead">
+        {{with part .Season .Episode}}<span class="tag">{{.}}</span>{{end}}
         {{if not $.Single}}<span class="stars">{{stars .Rating}}</span>{{end}}
         <span class="date muted">{{if $.Single}}Watched {{end}}{{with .ViewedOn}}{{.}}{{else}}undated{{end}}</span>
         <a class="small" href="/viewings/{{.ID}}/edit" data-on:click__prevent="@get('/movies/{{.MovieID}}/mine?edit={{.ID}}')">{{if and $.Single (not .Review)}}write a review{{else}}edit{{end}}</a>
@@ -60,11 +64,11 @@
 {{end}}
 
 <details class="add-viewing"{{if .AddOpen}} open{{end}}>
-  <summary>{{if .Viewings}}Watched it again? Add another viewing{{else}}Add a date or review{{end}}</summary>
+  <summary>{{if .TV}}Add a viewing of a season, an episode, or the whole series{{else if .Viewings}}Watched it again? Add another viewing{{else}}Add a date or review{{end}}</summary>
   <form method="post" action="/movies/{{.Movie.ID}}/viewings" class="stack" data-on:submit="@post('/movies/{{.Movie.ID}}/viewings', {contentType: 'form'})">
     {{with .AddErr}}<p class="flash flash-error">{{.}}</p>{{end}}
     {{template "viewing-fields" .Form}}
-    <div><button type="submit" class="primary">{{if .Viewings}}Add viewing{{else}}Save{{end}}</button></div>
+    <div><button type="submit" class="primary">{{if or .Viewings .TV}}Add viewing{{else}}Save{{end}}</button></div>
   </form>
 </details>
 </div>

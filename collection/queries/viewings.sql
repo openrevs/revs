@@ -7,7 +7,7 @@ ORDER BY viewed_on IS NULL, viewed_on DESC, id DESC;
 SELECT * FROM viewings ORDER BY movie_id, viewed_on, id;
 
 -- name: History :many
-SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, m.title, m.year
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, m.title, m.year, m.type
 FROM viewings v
 JOIN movies m ON m.id = v.movie_id
 ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.id DESC
@@ -17,13 +17,13 @@ LIMIT ?;
 SELECT * FROM viewings WHERE id = ?;
 
 -- name: CreateViewing :one
-INSERT INTO viewings (movie_id, viewed_on, rating, review)
-VALUES (?, ?, ?, ?)
+INSERT INTO viewings (movie_id, viewed_on, rating, review, season, episode)
+VALUES (?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdateViewing :exec
 UPDATE viewings
-SET viewed_on = ?, rating = ?, review = ?,
+SET viewed_on = ?, rating = ?, review = ?, season = ?, episode = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?;
 
@@ -31,5 +31,9 @@ WHERE id = ?;
 DELETE FROM viewings WHERE id = ?;
 
 -- name: CountMoviesAndViewings :one
-SELECT (SELECT COUNT(*) FROM movies) AS movies,
+SELECT (SELECT COUNT(*) FROM movies WHERE type = 'movie') AS movies,
+       (SELECT COUNT(*) FROM movies WHERE type = 'tv') AS series,
        (SELECT COUNT(*) FROM viewings) AS viewings;
+
+-- name: CountSeasonViewings :one
+SELECT COUNT(*) FROM viewings WHERE movie_id = ? AND season IS NOT NULL;

@@ -203,13 +203,14 @@ func expandHome(path string) string {
 func (s *dataScreen) view(a *app, width, height int) string {
 	var b strings.Builder
 	b.WriteString(styleHeading.Render("Export") + "\n")
-	b.WriteString(wrap(fmt.Sprintf("Save your collection (%d movies, %d viewings) as a signed ratingset file: the same document a push uploads.", s.counts.Movies, s.counts.Viewings), width) + "\n")
+	b.WriteString(wrap(fmt.Sprintf("Save your collection (%d movies, %d TV series, %d viewings) as a signed ratingset file: the same document a push uploads.", s.counts.Movies, s.counts.Series, s.counts.Viewings), width) + "\n")
 	if !s.hasKey {
 		b.WriteString(styleWarn.Render("Exports are signed: create or import a key first (tab 4).") + "\n")
 	}
 	b.WriteString("\n" + styleHeading.Render("Import") + "\n")
 	b.WriteString(wrap("Merge a ratingset file into your collection: a signed export, or unsigned JSON lines. "+
-		"Nothing is deleted or overwritten. Movies match by Wikidata, IMDb, or TMDB ID, otherwise by title and year; "+
+		"Nothing is deleted or overwritten. Movies and TV series match by Wikidata, IMDb, or TMDB ID, otherwise by title and year "+
+		"(a movie never matches a series); "+
 		"a viewing is added unless an identical one exists.", width) + "\n")
 	return b.String()
 }

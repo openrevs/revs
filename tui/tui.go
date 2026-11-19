@@ -77,7 +77,7 @@ type tab struct {
 }
 
 var tabs = []tab{
-	{"1", "Movies", func() screen { return &moviesScreen{} }},
+	{"1", "Movies & TV", func() screen { return &moviesScreen{} }},
 	{"2", "History", func() screen { return &historyScreen{} }},
 	{"3", "Servers", func() screen { return &serversScreen{} }},
 	{"4", "Identity", func() screen { return &identityScreen{} }},

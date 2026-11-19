@@ -85,7 +85,8 @@ func (h *harness) keys(ks ...string) {
 	h.t.Helper()
 	named := map[string]tea.KeyType{
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab, "down": tea.KeyDown,
-		"up": tea.KeyUp, "ctrl+s": tea.KeyCtrlS, "ctrl+n": tea.KeyCtrlN, "ctrl+f": tea.KeyCtrlF,
+		"up": tea.KeyUp, "shift+tab": tea.KeyShiftTab,
+		"ctrl+s": tea.KeyCtrlS, "ctrl+n": tea.KeyCtrlN, "ctrl+f": tea.KeyCtrlF,
 	}
 	for _, k := range ks {
 		if t, ok := named[k]; ok {
@@ -219,7 +220,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 	alice2.keys("enter", "3", "a")
 	alice2.a.prompt.input.SetValue(sts.URL)
 	alice2.keys("enter", "p")
-	require.Contains(t, alice2.a.flash, "Merged your collection from the server (revision 1) first. Imported 1 new movies")
+	require.Contains(t, alice2.a.flash, "Merged your collection from the server (revision 1) first. Imported 1 new titles")
 	require.Contains(t, alice2.a.flash, "Pushed revision 2")
 
 	// A copy the server hasn't published yet is a conflict, which
@@ -243,7 +244,7 @@ func TestIdentityAndPublishing(t *testing.T) {
 	fresh.keys("5", "i")
 	fresh.a.prompt.input.SetValue(path)
 	fresh.keys("enter")
-	require.Contains(t, fresh.a.flash, "Imported 2 new movies")
+	require.Contains(t, fresh.a.flash, "Imported 2 new titles")
 }
 
 // Edits made by another process on the same data directory show up
@@ -321,4 +322,58 @@ func TestRateFromList(t *testing.T) {
 	h.a.prompt.input.SetValue("")
 	h.keys("7", "enter")
 	require.Contains(t, h.screen(), "Rating must be")
+}
+
+// A TV series is entered with type tv, and its viewings take a season
+// and episode.
+func TestTVSeries(t *testing.T) {
+	h := newHarness(t, t.TempDir())
+	ctx := context.Background()
+	c := h.a.c
+
+	h.keys("a", "Fargo", "ctrl+n", "shift+tab")
+	for range len("movie") {
+		h.send(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	h.keys("tv", "tab", "tab", "2014", "ctrl+s")
+	require.Contains(t, h.a.flash, "Added Fargo", h.screen())
+	h.keys("esc") // skip rating it
+	require.Contains(t, h.screen(), "TV series")
+
+	movies, err := c.AllMovies(ctx)
+	require.NoError(t, err)
+	require.Len(t, movies, 1)
+	require.Equal(t, collection.TypeTV, movies[0].Type)
+
+	// Season 2, episode 3, rated 4 stars.
+	h.keys("v", "2", "tab", "3", "tab", "tab", "4", "ctrl+s")
+	require.Contains(t, h.a.flash, "Viewing added")
+	vs, err := c.Viewings(ctx, movies[0].ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 1)
+	require.Equal(t, "S2 E3", collection.PartName(vs[0].Season, vs[0].Episode))
+	require.Contains(t, h.screen(), "S2 E3")
+
+	// An episode needs a season.
+	h.keys("v", "tab", "1", "ctrl+s")
+	require.Contains(t, h.screen(), "An episode needs a season")
+	h.keys("esc")
+
+	// Rating the series adds a whole-series viewing.
+	h.keys("r", "3", "enter")
+	vs, err = c.Viewings(ctx, movies[0].ID)
+	require.NoError(t, err)
+	require.Len(t, vs, 2)
+	whole, ok := collection.LatestWhole(vs)
+	require.True(t, ok)
+	require.Equal(t, int64(6), *whole.Rating)
+
+	// The list marks series and filters by type.
+	h.keys("esc")
+	require.Contains(t, h.screen(), "Fargo (2014) [TV]")
+	h.keys("t")
+	require.Contains(t, h.screen(), "0 movies")
+	h.keys("t")
+	require.Contains(t, h.screen(), "1 TV series")
+	require.Contains(t, h.screen(), "Fargo (2014) [TV]")
 }
