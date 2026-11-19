@@ -23,14 +23,18 @@ const (
 	csvIMDBNoTT = "imdb_id_no_tt" // "0110912": some exports drop the "tt"
 	csvTMDB     = "tmdb_id"
 	csvReview   = "review"
+	csvType     = "type"    // "movie" (the default) or "tv"
+	csvSeason   = "season"  // tv only
+	csvEpisode  = "episode" // tv only, with a season
 )
 
-var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvIMDBNoTT, csvTMDB, csvReview}
+var csvColumns = []string{csvTitle, csvYear, csvRating, csvViewDate, csvIMDB, csvIMDBNoTT, csvTMDB, csvReview, csvType, csvSeason, csvEpisode}
 
-// parseCSV reads a CSV file of movies. The first line is a header
-// naming the columns; only title is required. Each row is one movie,
-// and a row with a rating, view date, or review also records a viewing
-// of it. Fields are standard CSV, so a quoted review may contain
+// parseCSV reads a CSV file of movies and TV series. The first line is
+// a header naming the columns; only title is required. Each row is one
+// movie, or with type "tv", one TV series, and a row with a rating,
+// view date, review, or season also records a viewing of it (for a
+// series, of that season or episode when one is given). Fields are standard CSV, so a quoted review may contain
 // commas, quotes ("") and line breaks.
 // Every row is validated before anything is returned.
 func parseCSV(data []byte) ([]ratingset.Item, error) {
@@ -81,19 +85,20 @@ func parseCSV(data []byte) ([]ratingset.Item, error) {
 			return ""
 		}
 
-		mf := MovieFields{Title: get(csvTitle), Year: get(csvYear), IMDB: get(csvIMDB), TMDB: get(csvTMDB)}
+		mf := MovieFields{Type: get(csvType), Title: get(csvTitle), Year: get(csvYear), IMDB: get(csvIMDB), TMDB: get(csvTMDB)}
 		in, merr := mf.Parse()
 		imdb, ierr := imdbNoTT(get(csvIMDBNoTT), in.IMDB)
 		if imdb != nil {
 			in.IMDB = imdb
 		}
-		vf := ViewingFields{Date: get(csvViewDate), Rating: get(csvRating), Review: get(csvReview)}
+		vf := ViewingFields{Type: in.typ(), Date: get(csvViewDate), Rating: get(csvRating), Review: get(csvReview),
+			Season: get(csvSeason), Episode: get(csvEpisode)}
 		vin, verr := vf.Parse()
 		if err := errors.Join(merr, ierr, verr); err != nil {
 			return nil, fmt.Errorf("line %d: %s", line, strings.ReplaceAll(err.Error(), "\n", "; "))
 		}
 
-		t := ratingset.Item{Type: ratingset.ItemTypeMovie, Title: in.Title}
+		t := ratingset.Item{Type: in.typ(), Title: in.Title}
 		if in.Year != nil {
 			y := int(*in.Year)
 			t.Year = &y
@@ -108,8 +113,8 @@ func parseCSV(data []byte) ([]ratingset.Item, error) {
 		if len(refs) > 0 {
 			t.Refs = refs
 		}
-		if vin.Date != nil || vin.Rating != nil || vin.Review != "" {
-			e := ratingset.Entry{Date: vin.Date}
+		if vin.Date != nil || vin.Rating != nil || vin.Review != "" || vin.Season != nil {
+			e := ratingset.Entry{Date: vin.Date, Season: intOf(vin.Season), Episode: intOf(vin.Episode)}
 			if vin.Rating != nil {
 				n := int(*vin.Rating)
 				e.Rating = &n
@@ -145,7 +150,7 @@ func imdbNoTT(s string, imdb *string) (*string, error) {
 	return id, nil
 }
 
-// ImportCSV merges a CSV file of movies into the collection (see
+// ImportCSV merges a CSV file of movies and TV series into the collection (see
 // parseCSV for the format, and mergeItems for how it merges). A file
 // that fails to parse changes nothing and yields an ErrUnreadableFile.
 func (c *Collection) ImportCSV(ctx context.Context, data []byte) (ImportStats, error) {
