@@ -35,6 +35,8 @@ type upstream struct {
 	// startup and after a failed ingest, so documents synced but not yet
 	// accepted (a crash, a database error) are picked up again.
 	reconcile bool
+
+	status upstreamStatus // guarded by Server.statusMu
 }
 
 // AddUpstream configures the server to pull from another server's
@@ -73,16 +75,28 @@ func (s *Server) Pull(ctx context.Context) error {
 
 	var errs []error
 	for _, up := range s.upstreams {
-		if err := s.pullUpstream(ctx, up); err != nil {
+		accepted, err := s.pullUpstream(ctx, up)
+		if err != nil {
 			slog.Error("pull failed", "upstream", up.url, "error", err)
 			errs = append(errs, fmt.Errorf("%s: %w", up.url, err))
 		}
+
+		s.statusMu.Lock()
+		up.status.lastPull = time.Now()
+		up.status.lastErr = ""
+		if err != nil {
+			up.status.lastErr = err.Error()
+		}
+		up.status.accepted += accepted
+		s.statusMu.Unlock()
 	}
 
 	return errors.Join(errs...)
 }
 
-func (s *Server) pullUpstream(ctx context.Context, up *upstream) error {
+// pullUpstream pulls once from up and returns how many documents it
+// accepted, even if it then failed.
+func (s *Server) pullUpstream(ctx context.Context, up *upstream) (int, error) {
 	res, err := up.client.Sync(ctx)
 
 	var diverged *client.DivergedError
@@ -97,7 +111,7 @@ func (s *Server) pullUpstream(ctx context.Context, up *upstream) error {
 	// A KeyChangedError lands here too: the upstream is signing with a
 	// different key than the one pinned, which needs an operator.
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	ids := res.Changed
@@ -105,7 +119,7 @@ func (s *Server) pullUpstream(ctx context.Context, up *upstream) error {
 		ids = nil
 		for doc, err := range up.client.Documents() {
 			if err != nil {
-				return err
+				return 0, err
 			}
 			ids = append(ids, doc.UserID)
 		}
@@ -114,7 +128,7 @@ func (s *Server) pullUpstream(ctx context.Context, up *upstream) error {
 	accepted, err := s.ingestUpstream(ctx, up, ids)
 	if err != nil {
 		up.reconcile = true
-		return err
+		return accepted, err
 	}
 	up.reconcile = false
 
@@ -127,7 +141,7 @@ func (s *Server) pullUpstream(ctx context.Context, up *upstream) error {
 		slog.Info("pulled upstream", attrs...)
 	}
 
-	return nil
+	return accepted, nil
 }
 
 // ingestUpstream accepts the upstream feed's documents for the given

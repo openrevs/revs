@@ -1,0 +1,57 @@
+:root {
+  --bg: #fbfaf8;
+  --fg: #1d1c1a;
+  --muted: #6b6760;
+  --line: #e3e0da;
+  --accent: #b4441b;
+  --accent-fg: #ffffff;
+  --ok-fg: #1f5a26;
+  --err-bg: #fbe9e6;
+  --err-fg: #8c2414;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614;
+    --fg: #ece9e3;
+    --muted: #9a958c;
+    --line: #34322e;
+    --accent: #e0703f;
+    --accent-fg: #171614;
+    --ok-fg: #a6d8ab;
+    --err-bg: #3a1f1a;
+    --err-fg: #f2b0a3;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; }
+main { max-width: 60rem; margin: 0 auto; padding: 1rem 1.5rem 3rem; }
+h1 { font-size: 1.6rem; margin: 0.2rem 0 1rem; }
+h2 { font-size: 1.2rem; margin: 2rem 0 0.4rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 0.35rem 0.6rem 0.35rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th, .kv th { color: var(--muted); font-weight: 500; }
+.kv th { width: 14rem; }
+.mono { font-family: var(--mono); font-size: 0.9em; word-break: break-all; }
+.muted { color: var(--muted); }
+.good { color: var(--ok-fg); }
+.bad { color: var(--err-fg); }
+.flash-error { background: var(--err-bg); color: var(--err-fg); padding: 0.5rem 0.8rem; border-radius: 4px; }
+.login { display: flex; flex-direction: column; gap: 0.8rem; max-width: 22rem; }
+.login label { display: flex; flex-direction: column; gap: 0.2rem; }
+input { font: inherit; padding: 0.4rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: inherit; }
+button { font: inherit; padding: 0.4rem 0.9rem; border: 0; border-radius: 4px; background: var(--accent); color: var(--accent-fg); cursor: pointer; align-self: flex-start; }
+button.link { background: none; color: var(--accent); padding: 0; text-decoration: underline; }

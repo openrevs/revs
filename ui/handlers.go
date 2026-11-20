@@ -17,6 +17,7 @@ import (
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection"
 	"github.com/openrevs/revs/collection/localdb"
+	"github.com/openrevs/revs/internal/datastarjs"
 )
 
 // maxImportSize bounds an uploaded import file.
@@ -34,6 +35,7 @@ func (a *App) Handler(loopbackOnly bool) http.Handler {
 
 	static, _ := fs.Sub(staticFS, "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServerFS(static)))
+	r.Handle("/static/datastar.js", datastarjs.Handler())
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/movies", http.StatusFound) })
 

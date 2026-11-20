@@ -1,0 +1,37 @@
+{{template "head" .}}
+{{/* The stream keeps #stats current; without JavaScript, reload. */}}
+<div data-init="@get('/updates')">
+{{template "stats" .}}
+</div>
+{{template "foot"}}
+
+{{define "stats"}}{{$now := .Now}}<div id="stats">{{with .Stats}}
+<h1>Server</h1>
+<table class="kv">
+  <tr><th>Server ID</th><td class="mono">{{.ID}}</td></tr>
+  <tr><th>Running since</th><td title="{{utc .Started}}">{{ago $now .Started}}</td></tr>
+  <tr><th>Users</th><td>{{.Users}} <span class="muted">({{.DirectUsers}} uploaded here, {{sub .Users .DirectUsers}} pulled)</span></td></tr>
+  <tr><th>Document revisions</th><td>{{.Revisions}}</td></tr>
+  <tr><th>Latest documents' size</th><td>{{bytes .Bytes}}</td></tr>
+  <tr><th>Last document received</th><td{{if not .LastReceived.IsZero}} title="{{utc .LastReceived}}"{{end}}>{{ago $now .LastReceived}}</td></tr>
+</table>
+
+<h2>Channels</h2>
+<p class="muted">Epochs are cut every {{.CutInterval}} when something changed.</p>
+<table>
+  <thead><tr><th>Channel</th><th>Epoch</th><th>Users</th><th>Last cut</th></tr></thead>
+  <tbody>{{range .Channels}}
+  <tr><td>{{.Name}}</td><td>{{.Epoch}}</td><td>{{.Members}}</td><td{{if not .Cut.IsZero}} title="{{utc .Cut}}"{{end}}>{{ago $now .Cut}}</td></tr>{{end}}
+  </tbody>
+</table>
+
+<h2>Upstreams</h2>
+{{if .Upstreams}}<p class="muted">Pulled every {{.PullInterval}}.</p>
+<table>
+  <thead><tr><th>Server</th><th>Last pull</th><th>Status</th><th>Accepted since start</th></tr></thead>
+  <tbody>{{range .Upstreams}}
+  <tr><td class="mono">{{.URL}}</td><td{{if not .LastPull.IsZero}} title="{{utc .LastPull}}"{{end}}>{{ago $now .LastPull}}</td><td>{{if .LastErr}}<span class="bad">{{.LastErr}}</span>{{else if .LastPull.IsZero}}—{{else}}<span class="good">ok</span>{{end}}</td><td>{{.Accepted}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">This server doesn't pull from any other servers.</p>{{end}}
+{{end}}</div>{{end}}

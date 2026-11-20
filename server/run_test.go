@@ -63,7 +63,7 @@ func TestServeShutsDown(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- serve(ctx, ln, s.Handler(), s.Run) }()
+	go func() { errc <- serve(ctx, []site{{ln, s.Handler(), false}}, s.Run) }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/v1/index.json")
 	require.NoError(t, err)

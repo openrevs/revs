@@ -6,7 +6,8 @@
 // directory, New for explicit dependencies), mounting Handler on its
 // own HTTP server, and calling Run for the background epoch cutter and
 // upstream puller. ListenAndServe does all of that, as "revs server"
-// does.
+// does, and also serves the operator's admin UI (AdminHandler) on a
+// separate address when one is configured.
 package server
 
 import (
@@ -14,6 +15,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -69,8 +71,14 @@ type Server struct {
 	pullInterval time.Duration
 	upstreams    []*upstream
 	pullMu       sync.Mutex
+	statusMu     sync.Mutex // guards each upstream's status
+
+	started time.Time
 
 	logRequests bool
+
+	admin       *admin
+	adminListen string
 }
 
 // Options overrides server tunables. Zero values keep the defaults.
@@ -90,6 +98,12 @@ type Options struct {
 	// LogRequests makes Handler log every HTTP request served (method,
 	// path, status, size, duration); never bodies.
 	LogRequests bool
+
+	// AdminListen is the address ListenAndServe serves the admin UI
+	// (AdminHandler) on; empty for none. It requires AdminPassword.
+	AdminListen string
+	// AdminPassword is the admin UI's password.
+	AdminPassword string
 }
 
 // Config holds everything a Server depends on. Open builds one from a
@@ -137,6 +151,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.DB == nil || cfg.Key == nil || cfg.Publications == nil {
 		return nil, errors.New("server config requires a DB, key, and publications")
 	}
+	if cfg.AdminListen != "" && cfg.AdminPassword == "" {
+		return nil, errors.New("the admin UI requires a password")
+	}
 
 	docs, err := NewSQLiteStore(cfg.DB.DB)
 	if err != nil {
@@ -157,6 +174,11 @@ func New(cfg Config) (*Server, error) {
 		compactEvery:  slices.Clone(DefaultCompactEvery),
 		pullInterval:  DefaultPullInterval,
 		logRequests:   cfg.LogRequests,
+		started:       time.Now(),
+		adminListen:   cfg.AdminListen,
+	}
+	if s.admin, err = newAdmin(s, cfg.AdminPassword); err != nil {
+		return nil, err
 	}
 	if s.httpClient == nil {
 		s.httpClient = &http.Client{Timeout: upstreamTimeout}
@@ -215,9 +237,10 @@ func (s *Server) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// ListenAndServe serves Handler on addr (DefaultListen if empty) and
-// runs the background work (see Run) until ctx is done, then shuts the
-// HTTP server down gracefully.
+// ListenAndServe serves Handler on addr (DefaultListen if empty), and
+// AdminHandler on AdminListen if set, and runs the background work
+// (see Run) until ctx is done, then shuts the HTTP servers down
+// gracefully.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if addr == "" {
 		addr = DefaultListen
@@ -227,12 +250,34 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		return err
 	}
 	slog.Info("server listening", "addr", ln.Addr().String())
-	return serve(ctx, ln, s.Handler(), s.Run)
+	sites := []site{{ln, s.Handler(), false}}
+
+	if s.adminListen != "" {
+		aln, err := net.Listen("tcp", s.adminListen)
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("admin UI: %w", err)
+		}
+		slog.Info("admin UI listening", "addr", aln.Addr().String())
+		// The dashboard's update streams never go idle, so they end
+		// when ctx does rather than holding up shutdown.
+		sites = append(sites, site{aln, s.AdminHandler(), true})
+	}
+
+	return serve(ctx, sites, s.Run)
 }
 
-// serve serves h on ln, with background running alongside, until ctx
-// is done or the HTTP server fails.
-func serve(ctx context.Context, ln net.Listener, h http.Handler, background func(context.Context)) error {
+// site is a handler to serve on a listener. With streams, request
+// contexts end when serving stops, for handlers that keep streaming.
+type site struct {
+	ln      net.Listener
+	h       http.Handler
+	streams bool
+}
+
+// serve serves each site, with background running alongside, until
+// ctx is done or an HTTP server fails.
+func serve(ctx context.Context, sites []site, background func(context.Context)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -242,19 +287,30 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, background func
 		background(ctx)
 	}()
 
-	hs := &http.Server{Handler: h}
-	errc := make(chan error, 1)
-	go func() { errc <- hs.Serve(ln) }()
+	servers := make([]*http.Server, len(sites))
+	errc := make(chan error, len(sites))
+	for i, st := range sites {
+		hs := &http.Server{Handler: st.h, ReadHeaderTimeout: 30 * time.Second}
+		if st.streams {
+			hs.BaseContext = func(net.Listener) context.Context { return ctx }
+		}
+		servers[i] = hs
+		go func() { errc <- hs.Serve(st.ln) }()
+	}
 
 	var err error
 	select {
 	case err = <-errc:
 	case <-ctx.Done():
-		shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
-		err = hs.Shutdown(shutdownCtx)
-		stop()
 	}
 	cancel()
+	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	for _, hs := range servers {
+		if serr := hs.Shutdown(shutdownCtx); serr != nil && err == nil {
+			err = serr
+		}
+	}
+	stop()
 	<-done
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
