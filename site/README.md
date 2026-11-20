@@ -1,7 +1,11 @@
 # OpenRevs website
 
-Live at https://openrevs.org. Published with GitHub Pages (deploy from `main`);
-GitHub builds it with Jekyll on every push, so there's nothing to install.
+Live at https://openrevs.org. Published with GitHub Pages by
+`.github/workflows/pages.yml`, which builds this directory with Jekyll on every
+push to `main` that touches `site/`, so there's nothing to install. The site
+tracks `main`: docs for a change go live when it merges.
+
+Run the commands below from this directory (`site/`).
 
 Theme: [Just the Docs](https://just-the-docs.com), set in `_config.yml`.
 
