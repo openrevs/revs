@@ -59,6 +59,8 @@ var funcs = template.FuncMap{
 	"starbar":  starSteps,
 	"timeAgo":  collection.TimeAgo,
 	"ago":      func(ts string) string { return collection.TimeAgo(&ts) },
+	"agoAt":    collection.TimeAgoAt,
+	"duration": collection.Duration,
 	"dict":     dict,
 }
 

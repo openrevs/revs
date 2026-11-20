@@ -10,11 +10,16 @@ import (
 )
 
 const createServer = `-- name: CreateServer :one
-INSERT INTO servers (url) VALUES (?) RETURNING id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at
+INSERT INTO servers (url, info) VALUES (?, ?) RETURNING id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at, info
 `
 
-func (q *Queries) CreateServer(ctx context.Context, url string) (Server, error) {
-	row := q.db.QueryRowContext(ctx, createServer, url)
+type CreateServerParams struct {
+	Url  string
+	Info *string
+}
+
+func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Server, error) {
+	row := q.db.QueryRowContext(ctx, createServer, arg.Url, arg.Info)
 	var i Server
 	err := row.Scan(
 		&i.ID,
@@ -25,6 +30,7 @@ func (q *Queries) CreateServer(ctx context.Context, url string) (Server, error) 
 		&i.LastEpoch,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.Info,
 	)
 	return i, err
 }
@@ -39,7 +45,7 @@ func (q *Queries) DeleteServer(ctx context.Context, id int64) error {
 }
 
 const getServer = `-- name: GetServer :one
-SELECT id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at FROM servers WHERE id = ?
+SELECT id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at, info FROM servers WHERE id = ?
 `
 
 func (q *Queries) GetServer(ctx context.Context, id int64) (Server, error) {
@@ -54,12 +60,13 @@ func (q *Queries) GetServer(ctx context.Context, id int64) (Server, error) {
 		&i.LastEpoch,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.Info,
 	)
 	return i, err
 }
 
 const listServers = `-- name: ListServers :many
-SELECT id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at FROM servers ORDER BY id
+SELECT id, url, last_push_at, last_push_rev, last_pull_at, last_epoch, last_error, created_at, info FROM servers ORDER BY id
 `
 
 func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
@@ -80,6 +87,7 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 			&i.LastEpoch,
 			&i.LastError,
 			&i.CreatedAt,
+			&i.Info,
 		); err != nil {
 			return nil, err
 		}
@@ -96,17 +104,18 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 
 const recordPull = `-- name: RecordPull :exec
 UPDATE servers
-SET last_pull_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_epoch = ?, last_error = NULL
+SET last_pull_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_epoch = ?, info = ?, last_error = NULL
 WHERE id = ?
 `
 
 type RecordPullParams struct {
 	LastEpoch *int64
+	Info      *string
 	ID        int64
 }
 
 func (q *Queries) RecordPull(ctx context.Context, arg RecordPullParams) error {
-	_, err := q.db.ExecContext(ctx, recordPull, arg.LastEpoch, arg.ID)
+	_, err := q.db.ExecContext(ctx, recordPull, arg.LastEpoch, arg.Info, arg.ID)
 	return err
 }
 

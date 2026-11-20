@@ -5,7 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/revstest"
 	"github.com/stretchr/testify/require"
 )
@@ -197,4 +199,46 @@ func TestOthersReviewsTV(t *testing.T) {
 	require.Len(t, titles, 1)
 	require.Equal(t, collection.TypeTV, titles[0].Type)
 	require.Len(t, titles[0].Reviews, 2)
+}
+
+// Adding a server checks that one answers at the URL and keeps what
+// its index says; pulls refresh it.
+func TestAddServerChecksIndex(t *testing.T) {
+	ctx := context.Background()
+	network := revstest.NewNetwork(t)
+	srv := network.NewServer()
+	author := network.NewAuthor()
+
+	_, err := author.AddServer(ctx, "http://nowhere.test")
+	require.ErrorIs(t, err, collection.ErrNoServer)
+	srv.Down()
+	_, err = author.AddServer(ctx, srv.URL)
+	require.ErrorIs(t, err, collection.ErrNoServer)
+	srv.Up()
+	servers, err := author.Servers(ctx)
+	require.NoError(t, err)
+	require.Empty(t, servers, "nothing added for a failed check")
+
+	s, err := author.AddServer(ctx, srv.URL+"/")
+	require.NoError(t, err)
+	info := collection.ServerInfo(s)
+	require.NotNil(t, info)
+	require.Equal(t, keys.UserID(srv.PublicKey()), info.ServerID)
+	require.Zero(t, info.Channel(client.DefaultChannel).Epoch)
+
+	_, err = author.AddServer(ctx, srv.URL)
+	require.ErrorIs(t, err, collection.ErrServerExists)
+
+	_, err = author.Push(ctx, s.ID)
+	require.NoError(t, err)
+	srv.Cut()
+	_, err = author.Pull(ctx, s.ID, false)
+	require.NoError(t, err)
+
+	st, err := author.ServerStatus(ctx, s.ID)
+	require.NoError(t, err)
+	require.NotNil(t, st.Info)
+	main := st.Info.Channel(client.DefaultChannel)
+	require.Equal(t, 1, main.Epoch)
+	require.False(t, main.LastPublished.IsZero())
 }

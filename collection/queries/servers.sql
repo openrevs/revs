@@ -5,7 +5,7 @@ SELECT * FROM servers ORDER BY id;
 SELECT * FROM servers WHERE id = ?;
 
 -- name: CreateServer :one
-INSERT INTO servers (url) VALUES (?) RETURNING *;
+INSERT INTO servers (url, info) VALUES (?, ?) RETURNING *;
 
 -- name: DeleteServer :exec
 DELETE FROM servers WHERE id = ?;
@@ -17,7 +17,7 @@ WHERE id = ?;
 
 -- name: RecordPull :exec
 UPDATE servers
-SET last_pull_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_epoch = ?, last_error = NULL
+SET last_pull_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_epoch = ?, info = ?, last_error = NULL
 WHERE id = ?;
 
 -- name: RecordServerError :exec

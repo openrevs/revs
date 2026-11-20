@@ -32,6 +32,38 @@
   {{with .Mine}}<dt>Your published copy</dt><dd>revision {{.Rev}}, {{.TitleCount}} movies</dd>{{end}}
 </dl>
 
+<section>
+  <h2>About this server</h2>
+  {{with .Info}}
+  <dl class="kv">
+    <dt>Server ID</dt><dd class="mono" title="{{.ServerID}}">{{.ServerID}}</dd>
+    <dt>Server key</dt><dd class="mono">{{.ServerKey}}</dd>
+    <dt>Index generated</dt><dd>{{agoAt .Created}}</dd>
+  </dl>
+  {{if .Channels}}
+  <table class="list">
+    <thead><tr><th>Channel</th><th class="num">Epoch</th><th>Last published</th><th>Publishes</th><th class="num">Epochs, last 7 days</th><th class="num">Snapshots</th><th class="num">Patches</th></tr></thead>
+    <tbody>
+    {{range .Channels}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td class="num">{{.Epoch}}</td>
+      <td>{{if .Epoch}}{{agoAt .LastPublished}}{{else}}not yet{{end}}</td>
+      <td>{{if .Interval}}up to every {{duration .Interval}}{{else}}<span class="muted">unknown</span>{{end}}</td>
+      <td class="num">{{.LastWeek}}</td>
+      <td class="num">{{.Snapshots}}</td>
+      <td class="num">{{.Patches}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p class="muted">A server publishes a new epoch on a schedule, but only when something changed, so the interval is the shortest gap seen between epochs.</p>
+  {{end}}
+  {{else}}
+  <p class="muted">Not known yet. Pull to fetch it.</p>
+  {{end}}
+</section>
+
 <div class="actions">
   <form method="post" action="/servers/{{.Server.ID}}/push"><button type="submit" class="primary">Push my reviews</button></form>
   <form method="post" action="/servers/{{.Server.ID}}/pull"><button type="submit">Pull</button></form>

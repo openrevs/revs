@@ -65,6 +65,30 @@ func TimeAgo(ts *string) string {
 	}
 }
 
+// TimeAgoAt is TimeAgo for a time.Time; the zero time is "never".
+func TimeAgoAt(t time.Time) string {
+	if t.IsZero() {
+		return TimeAgo(nil)
+	}
+	ts := t.UTC().Format("2006-01-02T15:04:05Z")
+	return TimeAgo(&ts)
+}
+
+// Duration describes a span like a publishing interval, roughly:
+// "45 min", "1 h", "3 days".
+func Duration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%d s", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%d min", int(d.Round(time.Minute).Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d h", int(d.Round(time.Hour).Hours()))
+	default:
+		return fmt.Sprintf("%d days", int(d.Round(24*time.Hour).Hours()/24))
+	}
+}
+
 // IMDBURL and WikidataURL link to a movie or TV series on those sites.
 func IMDBURL(id string) string     { return "https://www.imdb.com/title/" + id + "/" }
 func WikidataURL(id string) string { return "https://www.wikidata.org/wiki/" + id }

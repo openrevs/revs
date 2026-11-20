@@ -2,6 +2,7 @@ package collection
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -18,6 +19,9 @@ var (
 	ErrBadServerURL = errors.New("not a server URL like https://revs.example.com")
 	// ErrServerExists is returned by AddServer for a URL already listed.
 	ErrServerExists = errors.New("server is already in your list")
+	// ErrNoServer is returned by AddServer when no revs server answers
+	// at the URL: its index can't be fetched or makes no sense.
+	ErrNoServer = errors.New("no revs server found there")
 	// ErrNotPublished is returned by ImportMine when the server has no
 	// published collection for the user.
 	ErrNotPublished = errors.New("this server has no published collection for you yet; pull first")
@@ -32,18 +36,59 @@ func (c *Collection) Server(ctx context.Context, id int64) (localdb.Server, erro
 	return s, notFound(err)
 }
 
-// AddServer adds a server by URL.
+// AddServer adds a server by URL, after fetching its index to check
+// that a revs server answers there. What the index says is kept with
+// the server (see ServerInfo) and refreshed on every pull.
 func (c *Collection) AddServer(ctx context.Context, rawURL string) (localdb.Server, error) {
 	raw := strings.TrimRight(strings.TrimSpace(rawURL), "/")
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return localdb.Server{}, fmt.Errorf("%q: %w", raw, ErrBadServerURL)
 	}
-	s, err := c.q.CreateServer(ctx, raw)
+	servers, err := c.q.ListServers(ctx)
+	if err != nil {
+		return localdb.Server{}, err
+	}
+	for _, s := range servers {
+		if s.Url == raw {
+			return localdb.Server{}, fmt.Errorf("%s: %w", raw, ErrServerExists)
+		}
+	}
+
+	info, err := client.New(raw, nil, client.WithHTTPClient(c.http)).Info(ctx)
+	if err != nil {
+		return localdb.Server{}, fmt.Errorf("%s: %w (%v)", raw, ErrNoServer, err)
+	}
+	s, err := c.q.CreateServer(ctx, localdb.CreateServerParams{Url: raw, Info: encodeInfo(info)})
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return s, fmt.Errorf("%s: %w", raw, ErrServerExists)
 	}
 	return s, err
+}
+
+// ServerInfo returns what a server's index said about it when last
+// fetched (when it was added, or last pulled), or nil if unknown.
+func ServerInfo(s localdb.Server) *client.ServerInfo {
+	if s.Info == nil {
+		return nil
+	}
+	var info client.ServerInfo
+	if err := json.Unmarshal([]byte(*s.Info), &info); err != nil {
+		return nil
+	}
+	return &info
+}
+
+func encodeInfo(info *client.ServerInfo) *string {
+	if info == nil {
+		return nil
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		return nil
+	}
+	s := string(data)
+	return &s
 }
 
 // RemoveServer forgets a server and everything pulled from it. What
@@ -88,6 +133,7 @@ type ServerStatus struct {
 	Users  []localdb.IdxUser // users in the pulled corpus
 	Mine   *localdb.IdxUser  // the local user's published copy, if pulled
 	MyID   string
+	Info   *client.ServerInfo // what the server's index last said
 }
 
 // ServerStatus reports a server's sync state and pulled users. It
@@ -106,7 +152,7 @@ func (c *Collection) ServerStatus(ctx context.Context, id int64) (*ServerStatus,
 	if err != nil {
 		return nil, err
 	}
-	st := &ServerStatus{Server: s, Epoch: epoch, Users: users, MyID: c.UserID(ctx)}
+	st := &ServerStatus{Server: s, Epoch: epoch, Users: users, MyID: c.UserID(ctx), Info: ServerInfo(s)}
 	for i := range users {
 		if users[i].Userid == st.MyID {
 			st.Mine = &users[i]
@@ -354,7 +400,11 @@ func (c *Collection) pullLocked(ctx context.Context, s localdb.Server) (*client.
 
 func (c *Collection) recordPull(ctx context.Context, s localdb.Server, res *client.Result) error {
 	epoch := int64(res.Epoch)
-	return c.q.RecordPull(ctx, localdb.RecordPullParams{LastEpoch: &epoch, ID: s.ID})
+	info := s.Info
+	if res.Info != nil {
+		info = encodeInfo(res.Info)
+	}
+	return c.q.RecordPull(ctx, localdb.RecordPullParams{LastEpoch: &epoch, Info: info, ID: s.ID})
 }
 
 // PullMessage describes a successful pull.

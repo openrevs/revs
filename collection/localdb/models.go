@@ -55,6 +55,7 @@ type Server struct {
 	LastEpoch   *int64
 	LastError   *string
 	CreatedAt   string
+	Info        *string
 }
 
 type Setting struct {

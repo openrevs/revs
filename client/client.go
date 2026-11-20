@@ -195,19 +195,11 @@ func (c *Client) ensureState() error {
 }
 
 // resolvePin returns the base64 server key every manifest must be signed
-// with, checking the index agrees: the stored pin, else the configured
+// with, checking the (validated) index agrees: the stored pin, else the configured
 // key, else (trust on first use) the key the index advertises. Callers
 // hold c.mu.
-func (c *Client) resolvePin(idx *publicationIndex) (string, error) {
-	pub, err := keys.ParsePublic(idx.ServerKey)
-	if err != nil {
-		return "", fmt.Errorf("client: index advertises invalid server key %q: %w", idx.ServerKey, err)
-	}
-	if id := keys.UserID(pub); id != idx.ServerID {
-		return "", fmt.Errorf("client: index server ID %s does not match its key (%s)", idx.ServerID, id)
-	}
-
-	advertised := keys.EncodePublic(pub)
+func (c *Client) resolvePin(info *ServerInfo) (string, error) {
+	advertised := info.ServerKey
 
 	pin := ""
 	if c.pin != nil {

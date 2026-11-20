@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/openrevs/revs/collection"
+	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/ratingset"
 	"github.com/openrevs/revs/revstest"
 	jsonlines "github.com/openrevs/sjsonl-go"
@@ -812,4 +813,24 @@ func TestViewingDates(t *testing.T) {
 	added := u.get("/history?sort=added")
 	require.Contains(t, added, "<th>Added</th>")
 	require.Contains(t, added, "just now")
+}
+
+// Adding a server fetches its index first: no server, no entry; a
+// server found shows what its index says.
+func TestAddServerShowsInfo(t *testing.T) {
+	network := revstest.NewNetwork(t)
+	sts := network.NewServer()
+	u := newTestUI(t, onNetwork(network))
+
+	loc, msg := u.post("/servers", url.Values{"url": {"http://nowhere.test"}})
+	require.Equal(t, "/servers", loc)
+	require.Contains(t, msg, "no revs server found there")
+	require.Contains(t, u.get("/servers"), "No servers yet.")
+
+	loc, msg = u.post("/servers", url.Values{"url": {sts.URL}})
+	require.Equal(t, "/servers/1", loc)
+	require.Contains(t, msg, "Server found and added")
+	page := u.get(loc)
+	require.Contains(t, page, keys.UserID(sts.PublicKey()))
+	require.Contains(t, page, "<td>main</td>")
 }

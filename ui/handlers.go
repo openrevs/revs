@@ -696,15 +696,17 @@ func (a *App) serversList(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *App) serverCreate(w http.ResponseWriter, r *http.Request) error {
-	s, err := a.c.AddServer(r.Context(), r.PostFormValue("url"))
+	ctx, cancel := context.WithTimeout(r.Context(), networkTimeout)
+	defer cancel()
+	s, err := a.c.AddServer(ctx, r.PostFormValue("url"))
 	switch {
-	case errors.Is(err, collection.ErrBadServerURL), errors.Is(err, collection.ErrServerExists):
+	case errors.Is(err, collection.ErrBadServerURL), errors.Is(err, collection.ErrServerExists), errors.Is(err, collection.ErrNoServer):
 		redirect(w, r, "/servers", "error", err.Error())
 		return nil
 	case err != nil:
 		return err
 	}
-	redirect(w, r, serverURL(s.ID), "ok", "Server added. Pull to fetch its reviews, or push yours.")
+	redirect(w, r, serverURL(s.ID), "ok", "Server found and added. Pull to fetch its reviews, or push yours.")
 	return nil
 }
 
@@ -725,6 +727,7 @@ func (a *App) serverShow(w http.ResponseWriter, r *http.Request) error {
 		"Users":     st.Users,
 		"Mine":      st.Mine,
 		"MyID":      st.MyID,
+		"Info":      st.Info,
 		"Conflict":  r.URL.Query().Get("conflict"),
 		"Diverged":  r.URL.Query().Get("diverged") != "",
 		"KeyChange": r.URL.Query().Get("keychanged") != "",

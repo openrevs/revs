@@ -36,6 +36,9 @@ type Result struct {
 	// (it now holds the published one); resolving the fork is up to the
 	// caller.
 	Equivocations []Equivocation
+
+	// Info describes the server, from the index this Sync followed.
+	Info *ServerInfo
 }
 
 // Equivocation is two different signed documents for one user and rev.
@@ -93,7 +96,11 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	pin, err := c.resolvePin(idx)
+	info, err := idx.info()
+	if err != nil {
+		return nil, err
+	}
+	pin, err := c.resolvePin(info)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +116,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 		}
 	}
 
-	res := &Result{FromEpoch: c.state.Epoch}
+	res := &Result{FromEpoch: c.state.Epoch, Info: info}
 	changed := map[string]bool{}
 
 	// A corpus synced from another channel is no base for this one.
