@@ -63,14 +63,18 @@ func TestItemValidate(t *testing.T) {
 		`{"title":"Rocky","type":"movie"}`:                                               true,
 		`{"entries":[{}],"title":"Rocky","type":"MOVIE","x":1}`:                          true,
 		`{"entries":[{"date":"2024-02-29","rating":10}],"title":"Rocky","type":"movie"}`: true,
-		`{"title":"Rocky"}`:                                                  false, // no type
-		`{"title":" ","type":"movie"}`:                                       false, // blank title
-		`{"entries":[{"rating":11}],"title":"Rocky","type":"movie"}`:         false,
-		`{"entries":[{"rating":-1}],"title":"Rocky","type":"movie"}`:         false,
-		`{"entries":[{"date":"2023-02-29"}],"title":"Rocky","type":"movie"}`: false,
-		`{"entries":[{"date":"2023-2-1"}],"title":"Rocky","type":"movie"}`:   false,
-		`{"entries":[{"rating":7.5}],"title":"Rocky","type":"movie"}`:        false,
-		`{"id":"x","title":"Rocky","type":"movie"}`:                          false,
+		`{"title":"Rocky"}`:                                                               false, // no type
+		`{"title":" ","type":"movie"}`:                                                    false, // blank title
+		`{"entries":[{"rating":11}],"title":"Rocky","type":"movie"}`:                      false,
+		`{"entries":[{"rating":-1}],"title":"Rocky","type":"movie"}`:                      false,
+		`{"entries":[{"date":"2023-02-29"}],"title":"Rocky","type":"movie"}`:              false,
+		`{"entries":[{"date":"2023-2-1"}],"title":"Rocky","type":"movie"}`:                false,
+		`{"entries":[{"date":"2023-02"},{"date":"1999"}],"title":"Rocky","type":"movie"}`: true,
+		`{"entries":[{"date":"2023-13"}],"title":"Rocky","type":"movie"}`:                 false,
+		`{"entries":[{"date":"99"}],"title":"Rocky","type":"movie"}`:                      false,
+		`{"entries":[{"date":"2023-2"}],"title":"Rocky","type":"movie"}`:                  false,
+		`{"entries":[{"rating":7.5}],"title":"Rocky","type":"movie"}`:                     false,
+		`{"id":"x","title":"Rocky","type":"movie"}`:                                       false,
 		`[1]`: false,
 		// TV series: season and episode, only on tv items.
 		`{"entries":[{"date":"2015-03-01","rating":9,"season":1},{"rating":8}],"title":"Fargo","type":"tv","year":2014}`: true,

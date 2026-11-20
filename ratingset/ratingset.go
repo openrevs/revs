@@ -162,7 +162,7 @@ func (it Item) Validate(minRating, maxRating int) error {
 			return fmt.Errorf("rating %d is outside the scale %d..%d", *e.Rating, minRating, maxRating)
 		}
 		if e.Date != nil && !ValidDate(*e.Date) {
-			return fmt.Errorf("date %q is not a valid YYYY-MM-DD date", *e.Date)
+			return fmt.Errorf("date %q is not a valid YYYY-MM-DD, YYYY-MM, or YYYY date", *e.Date)
 		}
 		if (e.Season != nil || e.Episode != nil) && !it.IsType(ItemTypeTV) {
 			return fmt.Errorf("season and episode are only allowed on %s items", ItemTypeTV)
@@ -187,12 +187,30 @@ func (it Item) IsType(typ string) bool {
 	return strings.EqualFold(it.Type, typ)
 }
 
-// ValidDate reports whether s is a calendar date in YYYY-MM-DD form.
+// Date layouts an entry's date may take, from most to least precise:
+// a day, a month, or just a year. Dates in these forms sort correctly
+// as strings, a partial date before the more precise dates within it.
+const (
+	DateDay   = time.DateOnly // YYYY-MM-DD
+	DateMonth = "2006-01"     // YYYY-MM
+	DateYear  = "2006"        // YYYY
+)
+
+// ValidDate reports whether s is a valid date in YYYY-MM-DD, YYYY-MM,
+// or YYYY form.
 func ValidDate(s string) bool {
-	if len(s) != len(time.DateOnly) {
+	var layout string
+	switch len(s) {
+	case len(DateDay):
+		layout = DateDay
+	case len(DateMonth):
+		layout = DateMonth
+	case len(DateYear):
+		layout = DateYear
+	default:
 		return false
 	}
-	_, err := time.Parse(time.DateOnly, s)
+	_, err := time.Parse(layout, s)
 	return err == nil
 }
 

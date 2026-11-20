@@ -1,16 +1,26 @@
 -- name: ListViewingsForMovie :many
 SELECT * FROM viewings
 WHERE movie_id = ?
-ORDER BY viewed_on IS NULL, viewed_on DESC, id DESC;
+ORDER BY viewed_on IS NULL, viewed_on DESC, created_at DESC, id DESC;
 
 -- name: AllViewings :many
 SELECT * FROM viewings ORDER BY movie_id, viewed_on, id;
 
 -- name: History :many
-SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, m.title, m.year, m.type
+-- Newest viewing date first; undated viewings last, most recently
+-- added first.
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, v.created_at, m.title, m.year, m.type
 FROM viewings v
 JOIN movies m ON m.id = v.movie_id
-ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.id DESC
+ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.created_at DESC, v.id DESC
+LIMIT ?;
+
+-- name: HistoryByAdded :many
+-- Most recently added first, whatever their viewing dates.
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, v.created_at, m.title, m.year, m.type
+FROM viewings v
+JOIN movies m ON m.id = v.movie_id
+ORDER BY v.created_at DESC, v.id DESC
 LIMIT ?;
 
 -- name: GetViewing :one

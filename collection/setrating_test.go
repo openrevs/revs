@@ -3,7 +3,6 @@ package collection
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -14,11 +13,11 @@ func TestSetRating(t *testing.T) {
 	m, _, err := c.AddMovie(ctx, MovieInput{Title: "Alien"})
 	require.NoError(t, err)
 
-	// Unrated: adds a viewing dated today.
+	// Unrated: adds an undated viewing.
 	v, added, err := c.SetRating(ctx, m.ID, 8)
 	require.NoError(t, err)
 	require.True(t, added)
-	require.Equal(t, time.Now().Format(DateLayout), *v.ViewedOn)
+	require.Nil(t, v.ViewedOn)
 
 	// Rated: changes the latest viewing, keeping its date and review.
 	older, newer := "2020-01-01", "2024-06-01"

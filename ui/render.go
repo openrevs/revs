@@ -58,6 +58,7 @@ var funcs = template.FuncMap{
 	"today":    func() string { return time.Now().Format(collection.DateLayout) },
 	"starbar":  starSteps,
 	"timeAgo":  collection.TimeAgo,
+	"ago":      func(ts string) string { return collection.TimeAgo(&ts) },
 	"dict":     dict,
 }
 

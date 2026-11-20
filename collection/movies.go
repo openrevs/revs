@@ -177,8 +177,8 @@ func LatestWhole(vs []localdb.Viewing) (localdb.Viewing, bool) {
 // SetRating is the one-step way to rate a movie or TV series: it sets
 // the rating (in half stars) on its latest viewing of the whole item
 // (see LatestWhole), keeping its date and review, or, when there is
-// none yet, adds one dated today. It reports whether it added a
-// viewing.
+// none yet, adds an undated one: a rating alone says nothing about
+// when the item was watched. It reports whether it added a viewing.
 func (c *Collection) SetRating(ctx context.Context, movieID int64, rating int64) (v localdb.Viewing, added bool, err error) {
 	if rating < MinUserRating || rating > MaxRating {
 		return v, false, errStars
@@ -189,8 +189,7 @@ func (c *Collection) SetRating(ctx context.Context, movieID int64, rating int64)
 	}
 	v, ok := LatestWhole(vs)
 	if !ok {
-		today := time.Now().Format(DateLayout)
-		v, err = c.AddViewing(ctx, movieID, ViewingInput{Date: &today, Rating: &rating})
+		v, err = c.AddViewing(ctx, movieID, ViewingInput{Rating: &rating})
 		return v, err == nil, err
 	}
 	v.Rating = &rating
@@ -207,9 +206,22 @@ func (c *Collection) DeleteViewing(ctx context.Context, id int64) error {
 	return c.q.DeleteViewing(ctx, id)
 }
 
-// History lists up to limit viewings across all movies, newest first.
+// History lists up to limit viewings across all movies, newest viewing
+// date first, with undated viewings last, most recently added first.
 func (c *Collection) History(ctx context.Context, limit int64) ([]localdb.HistoryRow, error) {
 	return c.q.History(ctx, limit)
+}
+
+// RecentlyAdded lists up to limit viewings across all movies, most
+// recently added first, whatever their viewing dates. It's how to find
+// undated viewings, which History lists last.
+func (c *Collection) RecentlyAdded(ctx context.Context, limit int64) ([]localdb.HistoryRow, error) {
+	rows, err := c.q.HistoryByAdded(ctx, limit)
+	out := make([]localdb.HistoryRow, len(rows))
+	for i, r := range rows {
+		out[i] = localdb.HistoryRow(r)
+	}
+	return out, err
 }
 
 // ---- search ----
