@@ -94,6 +94,7 @@ type serverCmd struct {
 	Pull          []string      `help:"Pull documents from the server at URL (repeatable)" placeholder:"URL"`
 	PullInterval  time.Duration `help:"How often to pull from --pull servers" default:"${default_pull_interval}"`
 	LogRequests   bool          `help:"Log every HTTP request served (method, path, status, size, duration; never bodies)"`
+	AdminListen   string        `help:"Serve the admin web UI on this address (e.g. 127.0.0.1:1324); its password is read from ${admin_password_env}" placeholder:"ADDR"`
 }
 
 func (serverCmd) Help() string {
@@ -104,7 +105,8 @@ func (serverCmd) Help() string {
 		"publish and republishes the ones newer than its own, remembering which " +
 		"server each came from. The data directory holds the server's identity " +
 		"key, its document store and the published tree; back it up to keep the " +
-		"server's identity."
+		"server's identity. With --admin-listen, it also serves an admin web UI " +
+		"on a separate address, protected by the password in " + adminPasswordEnv + "."
 }
 
 type signCmd struct {
@@ -165,6 +167,11 @@ func (addCmd) Help() string {
 
 var CLI cli
 
+// adminPasswordEnv names the environment variable holding the server's
+// admin UI password. It is not a flag, so it stays out of process
+// listings and config files.
+const adminPasswordEnv = "REVS_ADMIN_PASSWORD"
+
 const tagline = "Portable, signed movie ratings that you own."
 
 // commandGroups titles the sections of the top-level help. Kong lists
@@ -214,6 +221,7 @@ func newParser(c *cli, configPaths ...string) (*kong.Kong, error) {
 			"default_part_size":      strconv.Itoa(server.DefaultPartSize),
 			"default_compact_every":  joinInts(server.DefaultCompactEvery),
 			"default_pull_interval":  server.DefaultPullInterval.String(),
+			"admin_password_env":     adminPasswordEnv,
 		},
 	)
 }
@@ -235,6 +243,10 @@ func main() {
 		c := CLI.Server
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		password := os.Getenv(adminPasswordEnv)
+		if c.AdminListen != "" && password == "" {
+			exitIfErr("revs server", fmt.Errorf("--admin-listen needs a password in %s", adminPasswordEnv))
+		}
 		srv := openServer(c.DataDir, server.Options{
 			CutInterval:   c.CutInterval,
 			SnapshotEvery: c.SnapshotEvery,
@@ -243,6 +255,8 @@ func main() {
 			Pull:          c.Pull,
 			PullInterval:  c.PullInterval,
 			LogRequests:   c.LogRequests,
+			AdminListen:   c.AdminListen,
+			AdminPassword: password,
 		})
 		exitIfErr("revs server", srv.ListenAndServe(ctx, c.Listen))
 	case "tui":

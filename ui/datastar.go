@@ -7,8 +7,9 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
-// Interactivity uses Datastar (https://data-star.dev): static/datastar.js
-// is a vendored copy of the client bundle, loaded on every page.
+// Interactivity uses Datastar (https://data-star.dev): /static/datastar.js
+// is the vendored client bundle in internal/datastarjs, loaded on every
+// page.
 //
 // Pages stay server-rendered templates, and every form and button is
 // still plain HTML that works without JavaScript. To make one live,

@@ -1,0 +1,22 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.Title}} · revs admin</title>
+<link rel="stylesheet" href="/static/admin.css">
+<script type="module" src="/static/datastar.js"></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand">revs admin</span>
+  {{if .Stats}}<form method="post" action="/logout"><button type="submit" class="link">Log out</button></form>{{end}}
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}</main>
+</body>
+</html>
+{{end}}

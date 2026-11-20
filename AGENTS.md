@@ -41,8 +41,9 @@ rules deliberately if the layering changes.
 
 ## Web UI interactivity
 
-`revs ui` uses Datastar (https://data-star.dev). `ui/static/datastar.js`
-is a vendored client bundle (version on its first line), and
+`revs ui` and the server's admin UI (`server/admin.go`) use Datastar
+(https://data-star.dev). `internal/datastarjs/datastar.js` is the
+vendored client bundle (version on its first line), shared by both, and
 `ui/datastar.go` has the server side and explains the pattern: pages
 are server-rendered templates; forms and buttons stay plain HTML that
 works without JavaScript, with a `data-on:*` Datastar action added; a
