@@ -30,7 +30,7 @@ import (
 
 // cli is the full command-line grammar. Every flag can also be set in a
 // YAML config file under a section named for its command (see
-// wip-docs/configuration.md in the website repo); flags given on the
+// site/specs/configuration.md); flags given on the
 // command line win.
 //
 // Each command's help tag is its one-line summary in the command list;

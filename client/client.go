@@ -1,5 +1,5 @@
 // Package client is a generic consumer of the revs publishing scheme
-// (specs/publishing-v2.md in the website repo). It follows one of a
+// (site/specs/publishing-v2.md). It follows one of a
 // server's channels, pulling its snapshots and patches as their signed
 // manifests direct and verifying every document against its author's
 // signature, and pushes signed

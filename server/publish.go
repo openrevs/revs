@@ -20,7 +20,7 @@ import (
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
-// Publishing: see specs/publishing-v2.md in the website repo.
+// Publishing: see site/specs/publishing-v2.md.
 
 const (
 	kindPatch    = "patch"

@@ -18,8 +18,7 @@ import (
 	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
-// The publication format: see specs/publishing-v2.md in the website
-// repo.
+// The publication format: see site/specs/publishing-v2.md.
 
 const (
 	// DefaultChannel is the channel a client follows unless told
