@@ -1,12 +1,14 @@
-{{define "content"}}
+{{define "content"}}{{with .Data}}
 <h1>Watch history</h1>
-{{if .Data}}
+<p class="filters small">{{if .ByAdded}}<a href="/history">By date watched</a> <strong>Recently added</strong>{{else}}<strong>By date watched</strong> <a href="/history?sort=added">Recently added</a>{{end}}</p>
+{{if .Rows}}
 <table class="list">
-  <thead><tr><th>Date</th><th>Title</th><th>Rating</th><th>Review</th></tr></thead>
+  <thead><tr><th>Date</th>{{if .ByAdded}}<th>Added</th>{{end}}<th>Title</th><th>Rating</th><th>Review</th></tr></thead>
   <tbody>
-  {{range .Data}}
+  {{range .Rows}}
   <tr>
     <td class="nowrap">{{with .ViewedOn}}{{.}}{{else}}<span class="muted">undated</span>{{end}}</td>
+    {{if $.Data.ByAdded}}<td class="nowrap muted">{{ago .CreatedAt}}</td>{{end}}
     <td><a href="/movies/{{.MovieID}}">{{.Title}}</a>{{with .Year}} <span class="muted">({{.}})</span>{{end}}{{if eq .Type "tv"}} <span class="tag">{{with part .Season .Episode}}{{.}}{{else}}TV series{{end}}</span>{{end}}</td>
     <td class="stars">{{stars .Rating}}</td>
     <td class="clip">{{.Review}}</td>
@@ -17,4 +19,4 @@
 {{else}}
 <p class="muted">No viewings yet.</p>
 {{end}}
-{{end}}
+{{end}}{{end}}

@@ -614,12 +614,21 @@ func (a *App) viewingDelete(w http.ResponseWriter, r *http.Request) error {
 	return a.doneMine(w, r, m, "Viewing deleted.")
 }
 
+// history lists viewings by date watched or, with sort=added, most
+// recently added first (the way to find undated ones).
 func (a *App) history(w http.ResponseWriter, r *http.Request) error {
-	rows, err := a.c.History(r.Context(), 500)
+	byAdded := r.URL.Query().Get("sort") == "added"
+	list := a.c.History
+	if byAdded {
+		list = a.c.RecentlyAdded
+	}
+	rows, err := list(r.Context(), 500)
 	if err != nil {
 		return err
 	}
-	a.render(w, r, http.StatusOK, "history.html", view{Title: "History", Nav: "history", Data: rows})
+	a.render(w, r, http.StatusOK, "history.html", view{Title: "History", Nav: "history", Data: map[string]any{
+		"Rows": rows, "ByAdded": byAdded,
+	}})
 	return nil
 }
 

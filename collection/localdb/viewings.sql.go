@@ -146,26 +146,29 @@ func (q *Queries) GetViewing(ctx context.Context, id int64) (Viewing, error) {
 }
 
 const history = `-- name: History :many
-SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, m.title, m.year, m.type
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, v.created_at, m.title, m.year, m.type
 FROM viewings v
 JOIN movies m ON m.id = v.movie_id
-ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.id DESC
+ORDER BY v.viewed_on IS NULL, v.viewed_on DESC, v.created_at DESC, v.id DESC
 LIMIT ?
 `
 
 type HistoryRow struct {
-	ID       int64
-	MovieID  int64
-	ViewedOn *string
-	Rating   *int64
-	Review   string
-	Season   *int64
-	Episode  *int64
-	Title    string
-	Year     *int64
-	Type     string
+	ID        int64
+	MovieID   int64
+	ViewedOn  *string
+	Rating    *int64
+	Review    string
+	Season    *int64
+	Episode   *int64
+	CreatedAt string
+	Title     string
+	Year      *int64
+	Type      string
 }
 
+// Newest viewing date first; undated viewings last, most recently
+// added first.
 func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error) {
 	rows, err := q.db.QueryContext(ctx, history, limit)
 	if err != nil {
@@ -183,6 +186,65 @@ func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error
 			&i.Review,
 			&i.Season,
 			&i.Episode,
+			&i.CreatedAt,
+			&i.Title,
+			&i.Year,
+			&i.Type,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const historyByAdded = `-- name: HistoryByAdded :many
+SELECT v.id, v.movie_id, v.viewed_on, v.rating, v.review, v.season, v.episode, v.created_at, m.title, m.year, m.type
+FROM viewings v
+JOIN movies m ON m.id = v.movie_id
+ORDER BY v.created_at DESC, v.id DESC
+LIMIT ?
+`
+
+type HistoryByAddedRow struct {
+	ID        int64
+	MovieID   int64
+	ViewedOn  *string
+	Rating    *int64
+	Review    string
+	Season    *int64
+	Episode   *int64
+	CreatedAt string
+	Title     string
+	Year      *int64
+	Type      string
+}
+
+// Most recently added first, whatever their viewing dates.
+func (q *Queries) HistoryByAdded(ctx context.Context, limit int64) ([]HistoryByAddedRow, error) {
+	rows, err := q.db.QueryContext(ctx, historyByAdded, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HistoryByAddedRow
+	for rows.Next() {
+		var i HistoryByAddedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.MovieID,
+			&i.ViewedOn,
+			&i.Rating,
+			&i.Review,
+			&i.Season,
+			&i.Episode,
+			&i.CreatedAt,
 			&i.Title,
 			&i.Year,
 			&i.Type,
@@ -203,7 +265,7 @@ func (q *Queries) History(ctx context.Context, limit int64) ([]HistoryRow, error
 const listViewingsForMovie = `-- name: ListViewingsForMovie :many
 SELECT id, movie_id, viewed_on, rating, review, created_at, updated_at, season, episode FROM viewings
 WHERE movie_id = ?
-ORDER BY viewed_on IS NULL, viewed_on DESC, id DESC
+ORDER BY viewed_on IS NULL, viewed_on DESC, created_at DESC, id DESC
 `
 
 func (q *Queries) ListViewingsForMovie(ctx context.Context, movieID int64) ([]Viewing, error) {

@@ -599,6 +599,7 @@ func TestQuickRating(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, vs, 1)
 	require.Equal(t, int64(9), *vs[0].Rating)
+	require.Nil(t, vs[0].ViewedOn, "a star alone doesn't say when it was watched")
 
 	// With it, the result's stars are patched in place.
 	sse := u.ds("POST", "/movies", url.Values{
@@ -776,4 +777,39 @@ func TestTVSeries(t *testing.T) {
 	require.NotContains(t, u.get("/movies?type=tv"), `href="/movies/2"`)
 	require.NotContains(t, u.get("/movies?type=movie"), `href="/movies/1"`)
 	require.Contains(t, u.get("/history"), "S2 E3")
+}
+
+// Dates may be partial (a month or a year) or cleared, and undated
+// viewings can be found in the recently added view.
+func TestViewingDates(t *testing.T) {
+	u := newTestUI(t)
+	ctx := context.Background()
+	u.post("/movies", url.Values{"title": {"Heat"}, "year": {"1995"}})
+
+	page := u.get("/movies/1")
+	require.NotContains(t, page, `type="date"`)
+	require.Contains(t, page, `name="viewed_on" value=""`, "a new viewing starts undated")
+
+	u.post("/movies/1/viewings", url.Values{"viewed_on": {"1996-02"}, "rating": {"4"}})
+	u.post("/movies/1/viewings", url.Values{"viewed_on": {"2003"}, "rating": {"none"}, "review": {"Again."}})
+	loc, _ := u.post("/movies/1/viewings", url.Values{"viewed_on": {"2003-1"}, "rating": {"none"}})
+	require.Empty(t, loc, "a malformed date is refused")
+	vs, err := u.app.c.Viewings(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, vs, 2)
+	require.Equal(t, "2003", *vs[0].ViewedOn)
+	require.Equal(t, "1996-02", *vs[1].ViewedOn)
+
+	u.post(fmt.Sprintf("/viewings/%d", vs[0].ID), url.Values{"viewed_on": {""}, "rating": {"none"}, "review": {"Again."}})
+	v, err := u.app.c.Viewing(ctx, vs[0].ID)
+	require.NoError(t, err)
+	require.Nil(t, v.ViewedOn, "clearing the date leaves the viewing undated")
+
+	hist := u.get("/history")
+	require.Contains(t, hist, "1996-02")
+	require.Contains(t, hist, "undated")
+	require.Contains(t, hist, `href="/history?sort=added"`)
+	added := u.get("/history?sort=added")
+	require.Contains(t, added, "<th>Added</th>")
+	require.Contains(t, added, "just now")
 }

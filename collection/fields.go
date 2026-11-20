@@ -12,8 +12,10 @@ import (
 	"github.com/openrevs/revs/ratingset"
 )
 
-// DateLayout is the format of viewing dates.
-const DateLayout = "2006-01-02"
+// DateLayout is the format of a viewing date given to the day. A date
+// may also be just a month (YYYY-MM) or a year (YYYY); see
+// ratingset.ValidDate.
+const DateLayout = ratingset.DateDay
 
 var (
 	imdbRe     = regexp.MustCompile(`tt\d{5,}`)
@@ -201,9 +203,9 @@ type ViewingFields struct {
 func (f ViewingFields) TV() bool { return f.Type == TypeTV }
 
 // NewViewingFields returns the fields for a new viewing of an item of
-// type typ: today, unrated.
+// type typ: undated and unrated.
 func NewViewingFields(typ string) ViewingFields {
-	return ViewingFields{Type: typ, Date: time.Now().Format(DateLayout), Rating: "none"}
+	return ViewingFields{Type: typ, Rating: "none"}
 }
 
 // ViewingFieldsFrom returns the fields for editing an existing viewing
@@ -233,8 +235,8 @@ func (f *ViewingFields) Parse() (ViewingInput, error) {
 
 	var errs []error
 	if f.Date != "" {
-		if _, err := time.Parse(DateLayout, f.Date); err != nil {
-			errs = append(errs, fmt.Errorf("date %q should be YYYY-MM-DD", f.Date))
+		if !ratingset.ValidDate(f.Date) {
+			errs = append(errs, fmt.Errorf("date %q should be YYYY-MM-DD, or YYYY-MM or YYYY if you don't know the day", f.Date))
 		} else {
 			in.Date = &f.Date
 		}

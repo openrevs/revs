@@ -317,7 +317,7 @@ func newViewingForm(m localdb.Movie, v *localdb.Viewing) *viewingForm {
 		}
 	}
 	f.fields = append(f.fields,
-		lineField("Date", vf.Date, "YYYY-MM-DD, or blank if you don't remember", 12),
+		lineField("Date", vf.Date, "YYYY-MM-DD, YYYY-MM, YYYY, or blank", 12),
 		lineField("Rating", vf.Rating, fmt.Sprintf("½–%d stars in steps of ½ (e.g. 3.5), or blank for no rating", collection.MaxStars), 3),
 		areaField("Review", vf.Review, "", 70, 8),
 	)
