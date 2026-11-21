@@ -34,6 +34,9 @@ var forbidden = map[string][]string{
 	// Shared formats sit below everything else.
 	"ratingset": {"client", "collection", "server", "ui", "tui", "revstest", "domain", "sqlc"},
 	"keys":      {"client", "collection", "server", "ratingset", "ui", "tui", "revstest", "domain", "sqlc"},
+	// Seed data tooling: plays the part of client authors, so no
+	// server or client apps.
+	"internal/movielens": {"collection", "server", "ui", "tui", "revstest", "domain", "sqlc"},
 }
 
 func TestLayering(t *testing.T) {
