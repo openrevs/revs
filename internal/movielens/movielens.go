@@ -37,6 +37,7 @@ import (
 
 	"github.com/openrevs/revs/keys"
 	"github.com/openrevs/revs/ratingset"
+	jsonlines "github.com/openrevs/sjsonl-go"
 )
 
 // The rating scale of the documents made here: MovieLens's half stars
@@ -311,6 +312,31 @@ func AuthorID(salt string, id int) string {
 // skipped because their movie isn't in the catalog. With no ratings
 // included the document is just the author line.
 func (c Catalog) Content(authorID string, u User, until int64) (content []byte, n, skipped int, err error) {
+	return c.render(ratingset.Author{ID: authorID, MinRating: MinRating, MaxRating: MaxRating}, u, until)
+}
+
+// Document is Content signed as the user's document at revision rev
+// (at least 1), with the key Key(salt, u.ID): a complete ratingset, as
+// a server accepts it.
+func (c Catalog) Document(salt string, u User, until int64, rev int) (doc []byte, n, skipped int, err error) {
+	if rev < 1 {
+		return nil, 0, 0, fmt.Errorf("revision %d is less than 1", rev)
+	}
+	key := Key(salt, u.ID)
+	author := ratingset.Author{ID: keys.UserID(key.Public().(ed25519.PublicKey)), MinRating: MinRating, MaxRating: MaxRating, Revision: rev}
+	content, n, skipped, err := c.render(author, u, until)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	doc, _, err = jsonlines.Sign(content, key)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("user %d: signing: %w", u.ID, err)
+	}
+	return doc, n, skipped, nil
+}
+
+// render is Content with the given author line.
+func (c Catalog) render(author ratingset.Author, u User, until int64) (content []byte, n, skipped int, err error) {
 	rs := make([]Rating, 0, len(u.Ratings))
 	for _, r := range u.Ratings {
 		if until != 0 && r.Time > until {
@@ -329,7 +355,7 @@ func (c Catalog) Content(authorID string, u User, until int64) (content []byte, 
 		return a.Movie - b.Movie
 	})
 
-	line, err := ratingset.EncodeLine(ratingset.Author{ID: authorID, MinRating: MinRating, MaxRating: MaxRating})
+	line, err := ratingset.EncodeLine(author)
 	if err != nil {
 		return nil, 0, 0, err
 	}

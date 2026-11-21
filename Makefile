@@ -3,6 +3,7 @@
 build:
 	go build -o bin/revs ./cmd/revs
 	go build -o bin/revs-txt2csv ./cmd/revs-txt2csv
+	go build -o bin/revs-seed ./cmd/revs-seed
 
 generate:
 	sqlc generate
