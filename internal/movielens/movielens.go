@@ -5,7 +5,8 @@
 //
 // It reads the CSV files of the current datasets (ml-latest, ml-25m,
 // ml-32m, ...): movies.csv and links.csv make a Catalog of items, and
-// ratings.csv is streamed one user at a time. Each MovieLens user
+// the ratings (ratings.csv, or that file split into ratings-1.csv,
+// ratings-2.csv, ...) are streamed one user at a time. Each MovieLens user
 // becomes an author with a key derived from a salt and the user's id,
 // so the same input always gives the same authors and documents.
 //
@@ -189,22 +190,32 @@ type User struct {
 	Ratings []Rating
 }
 
+// ratingsHeader is the first line of ratings.csv.
+const ratingsHeader = "userId,movieId,rating,timestamp"
+
+// Part is one file of ratings, named for messages.
+type Part struct {
+	Name string
+	R    io.Reader
+}
+
 // ReadUsers streams ratings.csv (userId,movieId,rating,timestamp),
 // calling fn with each user's ratings in turn, until fn returns an
 // error. The datasets list each user's ratings together; a user who
 // turns up again later is an error, since their earlier ratings have
 // already been passed on.
 func ReadUsers(r io.Reader, fn func(User) error) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	if !sc.Scan() {
-		if err := sc.Err(); err != nil {
-			return fmt.Errorf("ratings.csv: %w", err)
-		}
-		return errors.New("ratings.csv: empty")
-	}
-	if h := strings.TrimSpace(sc.Text()); h != "userId,movieId,rating,timestamp" {
-		return fmt.Errorf("ratings.csv: header is %q, want userId,movieId,rating,timestamp", h)
+	return ReadUserParts([]Part{{"ratings.csv", r}}, fn)
+}
+
+// ReadUserParts is ReadUsers over ratings.csv split into parts, read
+// in order as if they were one file: a user's ratings may run on from
+// one part into the next. The first part must start with the header
+// line; later ones may repeat it or not. Each part must hold whole
+// lines.
+func ReadUserParts(parts []Part, fn func(User) error) error {
+	if len(parts) == 0 {
+		return errors.New("no ratings")
 	}
 
 	var cur User
@@ -219,30 +230,45 @@ func ReadUsers(r io.Reader, fn func(User) error) error {
 		return err
 	}
 
-	for line := 2; sc.Scan(); line++ {
-		b := bytes.TrimSpace(sc.Bytes())
-		if len(b) == 0 {
-			continue
-		}
-		uid, rt, err := parseRating(b)
-		if err != nil {
-			return fmt.Errorf("ratings.csv:%d: %w", line, err)
-		}
-		if cur.Ratings != nil && uid != cur.ID {
-			if err := flush(); err != nil {
-				return err
+	for i, part := range parts {
+		sc := bufio.NewScanner(part.R)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		line := 0
+		for sc.Scan() {
+			line++
+			b := bytes.TrimSpace(sc.Bytes())
+			if line == 1 && string(b) == ratingsHeader {
+				continue
 			}
-		}
-		if cur.Ratings == nil {
-			if done[uid] {
-				return fmt.Errorf("ratings.csv:%d: user %d's ratings are not together", line, uid)
+			if line == 1 && i == 0 {
+				return fmt.Errorf("%s: header is %q, want %s", part.Name, b, ratingsHeader)
 			}
-			cur.ID = uid
+			if len(b) == 0 {
+				continue
+			}
+			uid, rt, err := parseRating(b)
+			if err != nil {
+				return fmt.Errorf("%s:%d: %w", part.Name, line, err)
+			}
+			if cur.Ratings != nil && uid != cur.ID {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+			if cur.Ratings == nil {
+				if done[uid] {
+					return fmt.Errorf("%s:%d: user %d's ratings are not together", part.Name, line, uid)
+				}
+				cur.ID = uid
+			}
+			cur.Ratings = append(cur.Ratings, rt)
 		}
-		cur.Ratings = append(cur.Ratings, rt)
-	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("ratings.csv: %w", err)
+		if err := sc.Err(); err != nil {
+			return fmt.Errorf("%s: %w", part.Name, err)
+		}
+		if i == 0 && line == 0 {
+			return fmt.Errorf("%s: empty", part.Name)
+		}
 	}
 	return flush()
 }

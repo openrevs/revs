@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -21,11 +22,15 @@ import (
 	"github.com/openrevs/revs/keys"
 )
 
-// Dataset is a MovieLens dataset directory: movies.csv, ratings.csv,
-// and optionally links.csv.
+// Dataset is a MovieLens dataset directory: movies.csv, the ratings,
+// and optionally links.csv. The ratings are ratings.csv, or that file
+// split by lines into ratings-1.csv, ratings-2.csv, and so on (see
+// FindRatings).
 type Dataset struct {
 	Dir     string
 	Catalog Catalog
+	// RatingsFiles are the names of the ratings files in Dir, in order.
+	RatingsFiles []string
 }
 
 // Open loads a dataset directory's catalog. Ratings are read later, as
@@ -46,6 +51,11 @@ func Open(dir string) (*Dataset, error) {
 		return nil, err
 	}
 
+	ratings, err := FindRatings(dir)
+	if err != nil {
+		return nil, err
+	}
+
 	var cat Catalog
 	if links != nil {
 		cat, err = LoadCatalog(movies, links)
@@ -55,17 +65,97 @@ func Open(dir string) (*Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Dataset{Dir: dir, Catalog: cat}, nil
+	return &Dataset{Dir: dir, Catalog: cat, RatingsFiles: ratings}, nil
 }
 
-// Users streams the dataset's users, as ReadUsers.
+// reRatingsPart matches the name of a part of a split ratings.csv.
+var reRatingsPart = regexp.MustCompile(`^ratings-(\d+)\.csv$`)
+
+// FindRatings returns the names of a dataset's ratings files, in the
+// order to read them: ratings-1.csv, ratings-2.csv, ... up to the last
+// one, if there are any, or else ratings.csv. The parts must be
+// numbered from 1 with no gaps; the numbers may be zero-padded
+// (ratings-01.csv), as split pads them.
+func FindRatings(dir string) ([]string, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	parts := map[int]string{}
+	for _, e := range ents {
+		m := reRatingsPart.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("%s: ratings parts are numbered from ratings-1.csv", e.Name())
+		}
+		if other, ok := parts[n]; ok {
+			return nil, fmt.Errorf("%s and %s are both ratings part %d", other, e.Name(), n)
+		}
+		parts[n] = e.Name()
+	}
+
+	if len(parts) == 0 {
+		if _, err := os.Stat(filepath.Join(dir, "ratings.csv")); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%s has neither ratings-1.csv nor ratings.csv", dir)
+			}
+			return nil, err
+		}
+		return []string{"ratings.csv"}, nil
+	}
+	names := make([]string, 0, len(parts))
+	for n := 1; n <= len(parts); n++ {
+		name, ok := parts[n]
+		if !ok {
+			return nil, fmt.Errorf("%s has %d ratings parts, but no part %d", dir, len(parts), n)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// Users streams the dataset's users from its ratings files, as
+// ReadUserParts.
 func (d *Dataset) Users(fn func(User) error) error {
-	f, err := os.Open(filepath.Join(d.Dir, "ratings.csv"))
+	parts := make([]Part, len(d.RatingsFiles))
+	for i, name := range d.RatingsFiles {
+		f, err := os.Open(filepath.Join(d.Dir, name))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		// A part that doesn't end a line was split mid-line, and would
+		// run on into the next.
+		if i < len(parts)-1 {
+			if err := endsLine(f); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+		parts[i] = Part{Name: name, R: f}
+	}
+	return ReadUserParts(parts, fn)
+}
+
+// endsLine checks that f is empty or ends with a newline.
+func endsLine(f *os.File) error {
+	fi, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return ReadUsers(f, fn)
+	if fi.Size() == 0 {
+		return nil
+	}
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, fi.Size()-1); err != nil {
+		return err
+	}
+	if b[0] != '\n' {
+		return errors.New("doesn't end with a newline: split ratings.csv by lines (e.g. split -l), not bytes")
+	}
+	return nil
 }
 
 // Selection picks which of a dataset's users to use.

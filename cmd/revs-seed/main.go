@@ -25,8 +25,10 @@ import (
 const usage = `Usage: revs-seed COMMAND [flags] DATASET
 
 Build revs data from a MovieLens dataset: a directory holding
-movies.csv, ratings.csv and (for IMDb and TMDB refs) links.csv, as in
-ml-latest, ml-25m or ml-32m.
+movies.csv, the ratings, and (for IMDb and TMDB refs) links.csv, as in
+ml-latest, ml-25m or ml-32m. The ratings are ratings.csv, or that file
+split by lines into ratings-1.csv, ratings-2.csv, ... (read in order,
+used when ratings-1.csv exists).
 
 Each MovieLens user becomes an author whose key is derived from -salt
 and the user's id: the same dataset and salt always give the same
@@ -133,7 +135,7 @@ func export(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	if !*quiet {
-		fmt.Fprintf(stderr, "catalog: %d movies\n", len(ds.Catalog))
+		fmt.Fprintf(stderr, "catalog: %d movies; ratings from %s\n", len(ds.Catalog), ratingsFiles(ds))
 		last := time.Now()
 		o.Progress = func(s movielens.ExportStats) {
 			if time.Since(last) >= 2*time.Second {
@@ -163,4 +165,13 @@ func summary(s movielens.ExportStats, d time.Duration) string {
 		str += fmt.Sprintf("; %d ratings of movies not in movies.csv", s.Skipped)
 	}
 	return str
+}
+
+// ratingsFiles describes the dataset's ratings files for messages.
+func ratingsFiles(ds *movielens.Dataset) string {
+	f := ds.RatingsFiles
+	if len(f) == 1 {
+		return f[0]
+	}
+	return fmt.Sprintf("%s ... %s (%d files)", f[0], f[len(f)-1], len(f))
 }

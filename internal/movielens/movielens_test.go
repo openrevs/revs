@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -217,7 +216,8 @@ func TestContentDropsDuplicateLines(t *testing.T) {
 }
 
 // TestDataset converts a real MovieLens dataset, if REVS_MOVIELENS names
-// its directory (holding movies.csv, links.csv and ratings.csv). Every
+// its directory (holding movies.csv, links.csv, and ratings.csv or its
+// parts ratings-1.csv, ratings-2.csv, ...). Every
 // user's full document must build, sign and verify; with -short only
 // the first thousand users are checked.
 func TestDataset(t *testing.T) {
@@ -225,22 +225,16 @@ func TestDataset(t *testing.T) {
 	if dir == "" {
 		t.Skip("set REVS_MOVIELENS to a MovieLens dataset directory to run")
 	}
-	open := func(name string) *os.File {
-		f, err := os.Open(filepath.Join(dir, name))
-		require.NoError(t, err)
-		t.Cleanup(func() { f.Close() })
-		return f
-	}
-
 	start := time.Now()
-	c, err := LoadCatalog(open("movies.csv"), open("links.csv"))
+	ds, err := Open(dir)
 	require.NoError(t, err)
-	t.Logf("catalog: %d movies in %v", len(c), time.Since(start))
+	c := ds.Catalog
+	t.Logf("catalog: %d movies in %v; ratings in %s", len(c), time.Since(start), strings.Join(ds.RatingsFiles, ", "))
 
 	errDone := errors.New("done")
 	var nUsers, nRatings, nSkipped, bytesOut int
 	start = time.Now()
-	err = ReadUsers(open("ratings.csv"), func(u User) error {
+	err = ds.Users(func(u User) error {
 		if testing.Short() && nUsers == 1000 {
 			return errDone
 		}

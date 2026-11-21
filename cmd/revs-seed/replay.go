@@ -177,7 +177,7 @@ func replay(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		}
 	}
 
-	fmt.Fprintf(stderr, "catalog: %d movies; replaying into %s\n", len(ds.Catalog), o.URL)
+	fmt.Fprintf(stderr, "catalog: %d movies; ratings from %s; replaying into %s\n", len(ds.Catalog), ratingsFiles(ds), o.URL)
 	// Fixed widths rather than a tabwriter, so rows print as they come.
 	const row = "%4v  %-10v  %8v  %10v  %7v  %6v  %7v  %6v  %9v  %9v  %8v  %8v  %6v  %8v  %8v\n"
 	fmt.Fprintf(stdout, row, "step", "until", "authors", "ratings", "pushed", "new", "patches", "full",

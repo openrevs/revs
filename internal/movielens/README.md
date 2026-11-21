@@ -18,13 +18,37 @@ Use one of the current MovieLens datasets: `ml-latest`, `ml-25m`,
 project's private datasets repo, or can be downloaded from GroupLens.
 A dataset is a directory holding:
 
-| File          | Columns                              | Needed |
-|---------------|--------------------------------------|--------|
-| `movies.csv`  | `movieId,title,genres`               | yes    |
-| `ratings.csv` | `userId,movieId,rating,timestamp`    | yes    |
-| `links.csv`   | `movieId,imdbId,tmdbId`              | no; gives items IMDb and TMDB refs |
+| File | Columns | Needed |
+|------|---------|--------|
+| `movies.csv` | `movieId,title,genres` | yes |
+| `ratings-1.csv`, `ratings-2.csv`, ... or `ratings.csv` | `userId,movieId,rating,timestamp` | yes |
+| `links.csv` | `movieId,imdbId,tmdbId` | no; gives items IMDb and TMDB refs |
 
 Other files in the directory (`tags.csv`, the README) are ignored.
+
+### Split ratings
+
+`ratings.csv` runs to gigabytes in the larger datasets, so it can be
+split into parts named `ratings-1.csv`, `ratings-2.csv`, and so on.
+When `ratings-1.csv` exists, the parts are read in order as if they
+were one file (and a `ratings.csv` beside them is ignored); otherwise
+`ratings.csv` is read.
+
+- Number the parts from 1 with no gaps. The numbers may be
+  zero-padded (`ratings-01.csv`). A gap (`ratings-3.csv` missing while
+  `ratings-4.csv` exists), or two names for one part (`ratings-1.csv`
+  and `ratings-01.csv`), is an error.
+- Split by lines, not bytes: each part but the last must end with a
+  newline. A user's ratings may run on from one part into the next.
+- `ratings-1.csv` must start with the header line; later parts may
+  repeat it or not.
+
+GNU `split` makes such parts directly (here, 5 million lines each,
+named `ratings-01.csv`, `ratings-02.csv`, ...):
+
+```sh
+split -l 5000000 --numeric-suffixes=1 --additional-suffix=.csv ratings.csv ratings-
+```
 
 The MovieLens license doesn't allow redistributing the data, so never
 commit any of it here; the tests use small synthetic files.
@@ -215,7 +239,7 @@ package directly:
 
 ```go
 ds, err := movielens.Open("/path/to/ml-latest")        // loads the catalog
-err = ds.Users(func(u movielens.User) error {            // streams ratings.csv
+err = ds.Users(func(u movielens.User) error {            // streams the ratings
 	doc, n, skipped, err := ds.Catalog.Document("salt", u, 0, 1) // signed, revision 1
 	...
 })
