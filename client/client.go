@@ -38,6 +38,17 @@ type Client struct {
 
 	mu    sync.Mutex
 	state *State
+	// What of state has changed since it was last saved; see save.
+	unsaved unsavedState
+}
+
+// unsavedState is what of a client's State has changed since the store
+// last saved it: the users whose head or push state changed, and
+// whether all heads were dropped first.
+type unsavedState struct {
+	resetHeads bool
+	heads      map[string]bool
+	push       map[string]bool
 }
 
 type Option func(*Client)
@@ -168,6 +179,69 @@ func (c *Client) Reload() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state = nil
+	c.unsaved = unsavedState{}
+}
+
+// markHeads notes that the heads of users ids (a superset of those
+// that changed will do) have changed since the last save. Callers hold
+// c.mu.
+func (c *Client) markHeads(ids iter.Seq[string]) {
+	if c.unsaved.heads == nil {
+		c.unsaved.heads = map[string]bool{}
+	}
+	for id := range ids {
+		c.unsaved.heads[id] = true
+	}
+}
+
+// resetHeads drops every head. Callers hold c.mu.
+func (c *Client) resetHeads() {
+	c.state.Heads = map[string]Head{}
+	c.unsaved.resetHeads = true
+	c.unsaved.heads = nil
+}
+
+// setPush records what the server is known to hold for a user. Callers
+// hold c.mu.
+func (c *Client) setPush(uid string, ps PushState) {
+	if c.unsaved.push == nil {
+		c.unsaved.push = map[string]bool{}
+	}
+	c.unsaved.push[uid] = true
+	c.state.Push[uid] = ps
+}
+
+// save commits what has changed in the state since it was last saved.
+// Changes stay pending until a save succeeds, so one that fails is
+// retried with the next. Callers hold c.mu.
+func (c *Client) save() error {
+	ch := StateChange{
+		Channel:    c.state.Channel,
+		Epoch:      c.state.Epoch,
+		ServerKey:  c.state.ServerKey,
+		ResetHeads: c.unsaved.resetHeads,
+	}
+	if len(c.unsaved.heads) > 0 {
+		ch.Heads = make(map[string]*Head, len(c.unsaved.heads))
+		for id := range c.unsaved.heads {
+			if h, ok := c.state.Heads[id]; ok {
+				ch.Heads[id] = &h
+			} else {
+				ch.Heads[id] = nil
+			}
+		}
+	}
+	if len(c.unsaved.push) > 0 {
+		ch.Push = make(map[string]PushState, len(c.unsaved.push))
+		for id := range c.unsaved.push {
+			ch.Push[id] = c.state.Push[id]
+		}
+	}
+	if err := c.store.UpdateState(ch); err != nil {
+		return err
+	}
+	c.unsaved = unsavedState{}
+	return nil
 }
 
 // ensureState lazily loads persisted state. Callers hold c.mu.

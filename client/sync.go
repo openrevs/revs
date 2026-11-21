@@ -111,7 +111,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	pub := publisher{pin: pin, serverID: idx.ServerID}
 	if c.state.ServerKey != pin {
 		c.state.ServerKey = pin
-		if err := c.store.SaveState(c.state); err != nil {
+		if err := c.save(); err != nil {
 			return nil, err
 		}
 	}
@@ -128,7 +128,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 		for id := range c.state.Heads {
 			changed[id] = true
 		}
-		c.state.Heads = map[string]Head{}
+		c.resetHeads()
 		c.state.Epoch = 0
 		res.BootstrapReason = "rebootstrap"
 	}
@@ -154,7 +154,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	} else if force {
 		// Nothing to bootstrap from: the rebuilt corpus starts empty
 		// and is reached by patches from epoch 0.
-		if err := c.store.SaveState(c.state); err != nil {
+		if err := c.save(); err != nil {
 			return nil, err
 		}
 		res.Bootstrapped = true
@@ -171,7 +171,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := c.store.SaveState(c.state); err != nil {
+			if err := c.save(); err != nil {
 				return nil, err
 			}
 			advanced = true
@@ -326,6 +326,7 @@ func (c *Client) plan(m *manifest, heads map[string]Head, res *Result) (map[stri
 // says, and every needed entry must turn up.
 func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, need map[string]manifestEntry, parts []int, heads map[string]Head) error {
 	got := map[string]bool{}
+	batch := &blobBatch{store: c.store}
 
 	for _, part := range parts {
 		seen := map[string]bool{}
@@ -355,7 +356,7 @@ func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, n
 			if err != nil {
 				return err
 			}
-			h, err := c.applyEntry(en, e, data)
+			h, err := c.applyEntry(batch, en, e, data)
 			if err != nil {
 				return err
 			}
@@ -374,6 +375,56 @@ func (c *Client) fetchEntries(ctx context.Context, prefix string, m *manifest, n
 		}
 	}
 
+	// Stored before the caller saves the heads that point at them.
+	return batch.flush()
+}
+
+// Documents a sync brings are stored in batches, flushed once they hold
+// this many documents or bytes, and before the heads that point at them
+// are saved.
+// (Variables so tests can shrink them.)
+var (
+	blobBatchCount = 1000
+	blobBatchBytes = 8 << 20
+)
+
+// blobBatch collects verified documents to store together.
+type blobBatch struct {
+	store  Store
+	blobs  []Blob
+	byHash map[string][]byte
+	size   int
+}
+
+func (b *blobBatch) add(hash string, data []byte) error {
+	if b.byHash == nil {
+		b.byHash = map[string][]byte{}
+	}
+	b.blobs = append(b.blobs, Blob{Hash: hash, Data: data})
+	b.byHash[hash] = data
+	b.size += len(data)
+	if len(b.blobs) >= blobBatchCount || b.size >= blobBatchBytes {
+		return b.flush()
+	}
+	return nil
+}
+
+// get returns a blob from the batch, or from the store.
+func (b *blobBatch) get(hash string) ([]byte, error) {
+	if data, ok := b.byHash[hash]; ok {
+		return data, nil
+	}
+	return b.store.GetBlob(hash)
+}
+
+func (b *blobBatch) flush() error {
+	if len(b.blobs) == 0 {
+		return nil
+	}
+	if err := b.store.PutBlobs(b.blobs); err != nil {
+		return err
+	}
+	b.blobs, b.byHash, b.size = nil, nil, 0
 	return nil
 }
 
@@ -419,6 +470,8 @@ func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, cha
 		}
 	}
 
+	c.markHeads(maps.Keys(m.entries))
+	c.markHeads(slices.Values(m.removed))
 	c.state.Heads = heads
 	c.state.Epoch = end
 
@@ -429,7 +482,7 @@ func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, cha
 // full docs stand alone, sjsonl patches apply to the base they name,
 // which may be any document the store holds. The result must be the
 // document the manifest entry e lists.
-func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, error) {
+func (c *Client) applyEntry(batch *blobBatch, en entryName, e manifestEntry, data []byte) (Head, error) {
 	ctl, err := peekControl(data)
 	if err != nil {
 		return Head{}, err
@@ -438,7 +491,7 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 	var h Head
 	switch {
 	case ctl.SJSONL == "doc" && !en.isPatch:
-		h, err = c.ingestDoc(en, data)
+		h, err = c.ingestDoc(batch, en, data)
 		if err != nil {
 			return Head{}, err
 		}
@@ -447,7 +500,7 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 		if ctl.Base != e.BaseHash {
 			return Head{}, fmt.Errorf("client: patch for user %s applies to %s, manifest says %s", en.userID, ctl.Base, e.BaseHash)
 		}
-		base, err := c.store.GetBlob(ctl.Base)
+		base, err := batch.get(ctl.Base)
 		if errors.Is(err, ErrBlobNotFound) {
 			return Head{}, &missingBaseError{userID: en.userID, base: ctl.Base}
 		}
@@ -462,7 +515,7 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 		if err != nil {
 			return Head{}, fmt.Errorf("client: applying patch for user %s: %w", en.userID, err)
 		}
-		h, err = c.ingestDoc(en, doc)
+		h, err = c.ingestDoc(batch, en, doc)
 		if err != nil {
 			return Head{}, err
 		}
@@ -485,7 +538,7 @@ func (c *Client) applyEntry(en entryName, e manifestEntry, data []byte) (Head, e
 // the user id and revision in the entry name must match the contents.
 // (sjsonl's Patch does not verify the result's signature itself, so
 // re-parsing here is what makes patched documents trustworthy.)
-func (c *Client) ingestDoc(en entryName, data []byte) (Head, error) {
+func (c *Client) ingestDoc(batch *blobBatch, en entryName, data []byte) (Head, error) {
 	doc, err := verifyDoc(data)
 	if err != nil {
 		return Head{}, fmt.Errorf("client: document for user %s: %w", en.userID, err)
@@ -495,7 +548,7 @@ func (c *Client) ingestDoc(en entryName, data []byte) (Head, error) {
 			en.userID, en.rev, doc.userID, doc.rev)
 	}
 
-	if err := c.store.PutBlob(doc.hash, doc.data); err != nil {
+	if err := batch.add(doc.hash, doc.data); err != nil {
 		return Head{}, err
 	}
 
@@ -534,8 +587,9 @@ func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap snapshotI
 		}
 	}
 
+	c.markHeads(maps.Keys(changed))
 	c.state.Heads = heads
 	c.state.Epoch = snap.Epoch
 
-	return c.store.SaveState(c.state)
+	return c.save()
 }

@@ -102,8 +102,8 @@ func (c *Client) Push(ctx context.Context, key ed25519.PrivateKey, content []byt
 	}
 
 	done := func(pushed bool) (*PushResult, error) {
-		c.state.Push[uid] = PushState{Rev: v.Rev, Hash: v.Hash}
-		if err := c.store.SaveState(c.state); err != nil {
+		c.setPush(uid, PushState{Rev: v.Rev, Hash: v.Hash})
+		if err := c.save(); err != nil {
 			return nil, err
 		}
 		return &PushResult{Pushed: pushed, Rev: v.Rev, Hash: v.Hash}, nil
@@ -143,8 +143,8 @@ func (c *Client) Push(ctx context.Context, key ed25519.PrivateKey, content []byt
 			// Record the fact of the newer revision — the content
 			// decision stays with the application.
 			serverRev := max(verdict.Rev, v.Rev)
-			c.state.Push[uid] = PushState{Rev: verdict.Rev, Hash: verdict.Hash, ServerRev: serverRev}
-			if err := c.store.SaveState(c.state); err != nil {
+			c.setPush(uid, PushState{Rev: verdict.Rev, Hash: verdict.Hash, ServerRev: serverRev})
+			if err := c.save(); err != nil {
 				return nil, err
 			}
 			if err := h.NoteRev(uid, serverRev, ""); err != nil {

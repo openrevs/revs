@@ -20,8 +20,7 @@ type PushState struct {
 
 // State is the client's mutable sync state. Epoch and Heads must
 // always agree with each other, since patches apply to exact channel
-// state, which is why Store.SaveState commits the whole value
-// atomically.
+// state, which is why Store.UpdateState applies each change atomically.
 type State struct {
 	// Channel is the channel Epoch and Heads belong to.
 	Channel string `json:"channel,omitempty"`
@@ -36,17 +35,65 @@ type State struct {
 	Push  map[string]PushState `json:"push,omitempty"`
 }
 
+// StateChange is a change to a client's State: its new channel, epoch
+// and server key, and just the heads and push states that changed, so
+// that saving a change costs what changed, not the size of the corpus.
+type StateChange struct {
+	Channel   string
+	Epoch     int
+	ServerKey string
+
+	// ResetHeads drops every head before Heads is applied.
+	ResetHeads bool
+	// Heads holds the users whose head changed: their new head, or nil
+	// if they no longer have one.
+	Heads map[string]*Head
+	// Push holds the users whose push state changed, and their new one.
+	Push map[string]PushState
+}
+
+// Apply makes the change to s, as a Store applies it to the state it
+// persists. A store that keeps the whole state as one value can
+// implement UpdateState as load, Apply, save.
+func (s *State) Apply(c StateChange) {
+	s.Channel, s.Epoch, s.ServerKey = c.Channel, c.Epoch, c.ServerKey
+	if c.ResetHeads || s.Heads == nil {
+		s.Heads = map[string]Head{}
+	}
+	for id, h := range c.Heads {
+		if h == nil {
+			delete(s.Heads, id)
+		} else {
+			s.Heads[id] = *h
+		}
+	}
+	if s.Push == nil {
+		s.Push = map[string]PushState{}
+	}
+	for id, p := range c.Push {
+		s.Push[id] = p
+	}
+}
+
+// Blob is a document as a Store keeps it: its sjsonl doc hash and
+// bytes.
+type Blob struct {
+	Hash string
+	Data []byte
+}
+
 // Store is where a Client keeps the corpus and its sync state. Blobs
 // are immutable, content-addressed by sjsonl doc hash; superseded
 // documents are retained, so implementations never delete on Put. Sync
 // relies on that: a compacted patch applies to a user's revision as of
 // an earlier epoch, which the store still holds even after newer
 // revisions arrived.
-//
-// SaveState must replace the previous state atomically: a crash may
-// lose the newest state, but must never leave a torn one.
 type Store interface {
-	PutBlob(hash string, data []byte) error
+	// PutBlobs stores blobs, each under its hash; one already stored is
+	// left as is. A client passes the documents a sync brings in
+	// batches, so a store can write each batch at once. If it fails,
+	// some of the blobs may have been stored.
+	PutBlobs([]Blob) error
 	// GetBlob returns a stored blob, or an error wrapping
 	// ErrBlobNotFound if there is none.
 	GetBlob(hash string) ([]byte, error)
@@ -54,5 +101,9 @@ type Store interface {
 	// LoadState returns the persisted state, or (nil, nil) if none has
 	// been saved yet.
 	LoadState() (*State, error)
-	SaveState(*State) error
+	// UpdateState applies a change to the persisted state (an empty
+	// State if none has been saved yet), as State.Apply does. It must
+	// apply it atomically: a crash may lose the newest change, but must
+	// never leave part of one applied.
+	UpdateState(StateChange) error
 }
