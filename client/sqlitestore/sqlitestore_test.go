@@ -11,43 +11,25 @@ import (
 
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/sqlitestore"
+	"github.com/openrevs/revs/client/storetest"
 	"github.com/openrevs/revs/revstest"
 	"github.com/stretchr/testify/require"
 )
+
+func TestState(t *testing.T) {
+	storetest.TestState(t, func(t *testing.T) client.Store {
+		db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Close() })
+		return db.Feed("s")
+	})
+}
 
 func TestStoreContract(t *testing.T) {
 	db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
 	require.NoError(t, err)
 	defer db.Close()
 	store := db.Feed("s")
-
-	// No state yet.
-	state, err := store.LoadState()
-	require.NoError(t, err)
-	require.Nil(t, state)
-
-	// Full round trip, including push state.
-	saved := &client.State{
-		Epoch:   7,
-		Channel: "main",
-		Heads:   map[string]client.Head{"u1": {Rev: 3, Hash: "ffff"}},
-		Push:    map[string]client.PushState{"u1": {Rev: 3, Hash: "ffff", ServerRev: 4}},
-	}
-	require.NoError(t, store.SaveState(saved))
-
-	loaded, err := store.LoadState()
-	require.NoError(t, err)
-	require.Equal(t, saved, loaded)
-
-	// Saving replaces wholesale: removed entries don't linger.
-	saved.Heads = map[string]client.Head{"u2": {Rev: 1, Hash: "aaaa"}}
-	saved.Push = map[string]client.PushState{}
-	require.NoError(t, store.SaveState(saved))
-
-	loaded, err = store.LoadState()
-	require.NoError(t, err)
-	require.Equal(t, saved.Heads, loaded.Heads)
-	require.Empty(t, loaded.Push)
 
 	// Blobs round trip; re-put of the same hash is a no-op; bad hashes
 	// are rejected.

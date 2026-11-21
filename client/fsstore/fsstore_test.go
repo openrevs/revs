@@ -6,41 +6,25 @@ import (
 
 	"github.com/openrevs/revs/client"
 	"github.com/openrevs/revs/client/fsstore"
+	"github.com/openrevs/revs/client/storetest"
 	"github.com/stretchr/testify/require"
 )
+
+func TestState(t *testing.T) {
+	storetest.TestState(t, func(t *testing.T) client.Store {
+		store, err := fsstore.New(t.TempDir())
+		require.NoError(t, err)
+		return store
+	})
+}
 
 func TestStoreContract(t *testing.T) {
 	dir := t.TempDir()
 	store, err := fsstore.New(dir)
 	require.NoError(t, err)
 
-	// No state yet.
-	state, err := store.LoadState()
-	require.NoError(t, err)
-	require.Nil(t, state)
-
-	// Full round trip, including push state.
-	saved := &client.State{
-		Epoch:   7,
-		Channel: "main",
-		Heads:   map[string]client.Head{"u1": {Rev: 3, Hash: "ffff"}},
-		Push:    map[string]client.PushState{"u1": {Rev: 3, Hash: "ffff", ServerRev: 4}},
-	}
-	require.NoError(t, store.SaveState(saved))
-
-	loaded, err := store.LoadState()
-	require.NoError(t, err)
-	require.Equal(t, saved, loaded)
-
-	// Saving replaces wholesale: removed entries don't linger.
-	saved.Heads = map[string]client.Head{"u2": {Rev: 1, Hash: "aaaa"}}
-	saved.Push = nil
-	require.NoError(t, store.SaveState(saved))
-
-	loaded, err = store.LoadState()
-	require.NoError(t, err)
-	require.Equal(t, saved.Heads, loaded.Heads)
-	require.Empty(t, loaded.Push)
+	heads := map[string]*client.Head{"u2": {Rev: 1, Hash: "aaaa"}}
+	require.NoError(t, store.UpdateState(client.StateChange{Channel: "main", Heads: heads}))
 
 	// Blobs round trip; re-put of the same hash is a no-op; bad hashes
 	// are rejected (they are also path segments here).
@@ -61,9 +45,9 @@ func TestStoreContract(t *testing.T) {
 	reopened, err := fsstore.New(dir)
 	require.NoError(t, err)
 
-	loaded, err = reopened.LoadState()
+	loaded, err := reopened.LoadState()
 	require.NoError(t, err)
-	require.Equal(t, saved.Heads, loaded.Heads)
+	require.Equal(t, map[string]client.Head{"u2": {Rev: 1, Hash: "aaaa"}}, loaded.Heads)
 
 	data, err = reopened.GetBlob("00ff")
 	require.NoError(t, err)

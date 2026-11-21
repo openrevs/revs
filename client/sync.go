@@ -111,7 +111,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	pub := publisher{pin: pin, serverID: idx.ServerID}
 	if c.state.ServerKey != pin {
 		c.state.ServerKey = pin
-		if err := c.store.SaveState(c.state); err != nil {
+		if err := c.save(); err != nil {
 			return nil, err
 		}
 	}
@@ -128,7 +128,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 		for id := range c.state.Heads {
 			changed[id] = true
 		}
-		c.state.Heads = map[string]Head{}
+		c.resetHeads()
 		c.state.Epoch = 0
 		res.BootstrapReason = "rebootstrap"
 	}
@@ -154,7 +154,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 	} else if force {
 		// Nothing to bootstrap from: the rebuilt corpus starts empty
 		// and is reached by patches from epoch 0.
-		if err := c.store.SaveState(c.state); err != nil {
+		if err := c.save(); err != nil {
 			return nil, err
 		}
 		res.Bootstrapped = true
@@ -171,7 +171,7 @@ func (c *Client) syncLocked(ctx context.Context, force bool) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := c.store.SaveState(c.state); err != nil {
+			if err := c.save(); err != nil {
 				return nil, err
 			}
 			advanced = true
@@ -419,6 +419,8 @@ func (c *Client) applyPatch(ctx context.Context, pub publisher, p patchInfo, cha
 		}
 	}
 
+	c.markHeads(maps.Keys(m.entries))
+	c.markHeads(slices.Values(m.removed))
 	c.state.Heads = heads
 	c.state.Epoch = end
 
@@ -534,8 +536,9 @@ func (c *Client) loadSnapshot(ctx context.Context, pub publisher, snap snapshotI
 		}
 	}
 
+	c.markHeads(maps.Keys(changed))
 	c.state.Heads = heads
 	c.state.Epoch = snap.Epoch
 
-	return c.store.SaveState(c.state)
+	return c.save()
 }

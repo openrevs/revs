@@ -125,7 +125,7 @@ func TestFeeds(t *testing.T) {
 	defer sdb.Close()
 	a, b := sdb.Feed("a"), sdb.Feed("b")
 
-	require.NoError(t, a.SaveState(&client.State{Epoch: 1, Heads: map[string]client.Head{"u": {Rev: 1, Hash: "aa"}}}))
+	require.NoError(t, a.UpdateState(client.StateChange{Epoch: 1, Heads: map[string]*client.Head{"u": {Rev: 1, Hash: "aa"}}}))
 	st, err := b.LoadState()
 	require.NoError(t, err)
 	require.Nil(t, st)

@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -102,8 +103,23 @@ func (s *memStore) GetBlob(hash string) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("memstore: %s: %w", hash, ErrBlobNotFound)
 }
-func (s *memStore) LoadState() (*State, error) { return s.state, nil }
-func (s *memStore) SaveState(st *State) error  { s.state = st; return nil }
+func (s *memStore) LoadState() (*State, error) {
+	if s.state == nil {
+		return nil, nil
+	}
+	st := &State{}
+	st.Apply(StateChange{Channel: s.state.Channel, Epoch: s.state.Epoch, ServerKey: s.state.ServerKey})
+	maps.Copy(st.Heads, s.state.Heads)
+	maps.Copy(st.Push, s.state.Push)
+	return st, nil
+}
+func (s *memStore) UpdateState(ch StateChange) error {
+	if s.state == nil {
+		s.state = &State{}
+	}
+	s.state.Apply(ch)
+	return nil
+}
 
 func TestPlan(t *testing.T) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)

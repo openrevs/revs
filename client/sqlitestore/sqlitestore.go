@@ -274,10 +274,9 @@ func (s *Store) LoadState() (*client.State, error) {
 	return state, nil
 }
 
-// SaveState replaces the feed's whole persisted state in one
-// transaction, keeping channel, epoch, pin, and heads consistent as the
-// Store contract requires.
-func (s *Store) SaveState(state *client.State) error {
+// UpdateState applies a change to the feed's state in one transaction,
+// writing just the heads and push states it lists.
+func (s *Store) UpdateState(ch client.StateChange) error {
 	tx, err := s.d.db.Begin()
 	if err != nil {
 		return err
@@ -287,32 +286,65 @@ func (s *Store) SaveState(state *client.State) error {
 	if _, err := tx.Exec(`INSERT INTO corpus_feeds (feed, channel, epoch, server_key) VALUES (?, ?, ?, ?)
 		ON CONFLICT (feed) DO UPDATE SET channel = excluded.channel, epoch = excluded.epoch,
 			server_key = excluded.server_key`,
-		s.feed, state.Channel, state.Epoch, state.ServerKey); err != nil {
+		s.feed, ch.Channel, ch.Epoch, ch.ServerKey); err != nil {
 		return err
 	}
-
-	for _, table := range []string{"corpus_heads", "corpus_push"} {
-		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE feed = ?`, s.feed); err != nil {
+	if ch.ResetHeads {
+		if _, err := tx.Exec(`DELETE FROM corpus_heads WHERE feed = ?`, s.feed); err != nil {
 			return err
 		}
 	}
-	for id, h := range state.Heads {
-		if _, err := tx.Exec(`INSERT INTO corpus_heads (feed, userid, rev, hash) VALUES (?, ?, ?, ?)`,
-			s.feed, id, h.Rev, h.Hash); err != nil {
+
+	if len(ch.Heads) > 0 {
+		setHead, err := tx.Prepare(`INSERT INTO corpus_heads (feed, userid, rev, hash) VALUES (?, ?, ?, ?)
+			ON CONFLICT (feed, userid) DO UPDATE SET rev = excluded.rev, hash = excluded.hash`)
+		if err != nil {
 			return err
 		}
+		defer setHead.Close()
 		// A feed can take a document another feed stored without
 		// putting it itself (its manifest showed it already held), so
 		// claim every head here too; otherwise removing the other feed
 		// would drop it.
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO corpus_feed_docs (feed, hash) VALUES (?, ?)`, s.feed, h.Hash); err != nil {
+		claim, err := tx.Prepare(`INSERT OR IGNORE INTO corpus_feed_docs (feed, hash) VALUES (?, ?)`)
+		if err != nil {
 			return err
 		}
-	}
-	for id, p := range state.Push {
-		if _, err := tx.Exec(`INSERT INTO corpus_push (feed, userid, rev, hash, server_rev) VALUES (?, ?, ?, ?, ?)`,
-			s.feed, id, p.Rev, p.Hash, p.ServerRev); err != nil {
+		defer claim.Close()
+		dropHead, err := tx.Prepare(`DELETE FROM corpus_heads WHERE feed = ? AND userid = ?`)
+		if err != nil {
 			return err
+		}
+		defer dropHead.Close()
+
+		for id, h := range ch.Heads {
+			if h == nil {
+				if _, err := dropHead.Exec(s.feed, id); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := setHead.Exec(s.feed, id, h.Rev, h.Hash); err != nil {
+				return err
+			}
+			if _, err := claim.Exec(s.feed, h.Hash); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(ch.Push) > 0 {
+		setPush, err := tx.Prepare(`INSERT INTO corpus_push (feed, userid, rev, hash, server_rev) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (feed, userid) DO UPDATE SET rev = excluded.rev, hash = excluded.hash,
+				server_rev = excluded.server_rev`)
+		if err != nil {
+			return err
+		}
+		defer setPush.Close()
+		for id, p := range ch.Push {
+			if _, err := setPush.Exec(s.feed, id, p.Rev, p.Hash, p.ServerRev); err != nil {
+				return err
+			}
 		}
 	}
 

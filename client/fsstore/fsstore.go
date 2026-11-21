@@ -85,7 +85,19 @@ func (s *Store) LoadState() (*client.State, error) {
 	return &state, nil
 }
 
-func (s *Store) SaveState(state *client.State) error {
+// UpdateState applies a change to the state file. The file holds the
+// whole state, so this rewrites it (atomically) however small the
+// change; sqlitestore writes just what changed.
+func (s *Store) UpdateState(ch client.StateChange) error {
+	state, err := s.LoadState()
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		state = &client.State{}
+	}
+	state.Apply(ch)
+
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
