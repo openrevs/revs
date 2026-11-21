@@ -4,8 +4,8 @@
 //
 // Each MovieLens user becomes an author, with a key derived from a salt
 // and the user's id, so the same dataset and salt always give the same
-// authors and documents. See the internal/movielens package for how
-// ratings are converted.
+// authors and documents. internal/movielens/README.md explains how to
+// use it and how ratings are converted.
 package main
 
 import (
