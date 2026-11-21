@@ -75,6 +75,13 @@ func (s *State) Apply(c StateChange) {
 	}
 }
 
+// Blob is a document as a Store keeps it: its sjsonl doc hash and
+// bytes.
+type Blob struct {
+	Hash string
+	Data []byte
+}
+
 // Store is where a Client keeps the corpus and its sync state. Blobs
 // are immutable, content-addressed by sjsonl doc hash; superseded
 // documents are retained, so implementations never delete on Put. Sync
@@ -82,7 +89,11 @@ func (s *State) Apply(c StateChange) {
 // an earlier epoch, which the store still holds even after newer
 // revisions arrived.
 type Store interface {
-	PutBlob(hash string, data []byte) error
+	// PutBlobs stores blobs, each under its hash; one already stored is
+	// left as is. A client passes the documents a sync brings in
+	// batches, so a store can write each batch at once. If it fails,
+	// some of the blobs may have been stored.
+	PutBlobs([]Blob) error
 	// GetBlob returns a stored blob, or an error wrapping
 	// ErrBlobNotFound if there is none.
 	GetBlob(hash string) ([]byte, error)

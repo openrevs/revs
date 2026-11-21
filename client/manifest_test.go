@@ -96,7 +96,12 @@ type memStore struct {
 	state *State
 }
 
-func (s *memStore) PutBlob(hash string, data []byte) error { s.blobs[hash] = data; return nil }
+func (s *memStore) PutBlobs(blobs []Blob) error {
+	for _, b := range blobs {
+		s.blobs[b.Hash] = b.Data
+	}
+	return nil
+}
 func (s *memStore) GetBlob(hash string) ([]byte, error) {
 	if b, ok := s.blobs[hash]; ok {
 		return b, nil

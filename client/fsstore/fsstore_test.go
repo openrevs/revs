@@ -18,6 +18,14 @@ func TestState(t *testing.T) {
 	})
 }
 
+func TestBlobs(t *testing.T) {
+	storetest.TestBlobs(t, func(t *testing.T) client.Store {
+		store, err := fsstore.New(t.TempDir())
+		require.NoError(t, err)
+		return store
+	})
+}
+
 func TestStoreContract(t *testing.T) {
 	dir := t.TempDir()
 	store, err := fsstore.New(dir)

@@ -109,3 +109,29 @@ func requireState(t *testing.T, s client.Store, want *client.State) {
 	}
 	require.Equal(t, norm(want), norm(got))
 }
+
+// TestBlobs checks a store's PutBlobs and GetBlob. newStore must return
+// an empty store.
+func TestBlobs(t *testing.T, newStore func(t *testing.T) client.Store) {
+	s := newStore(t)
+	_, err := s.GetBlob("00aa")
+	require.ErrorIs(t, err, client.ErrBlobNotFound)
+
+	blobs := []client.Blob{
+		{Hash: "00aa", Data: []byte("header\nline one\nsig")},
+		{Hash: "00bb", Data: []byte("header\nline one\nline two\nsig")},
+		{Hash: "00cc", Data: []byte("")},
+		{Hash: "00aa", Data: []byte("header\nline one\nsig")}, // twice in a batch
+	}
+	require.NoError(t, s.PutBlobs(blobs))
+	require.NoError(t, s.PutBlobs(blobs[:1]), "a blob already held")
+	require.NoError(t, s.PutBlobs(nil))
+	for _, b := range blobs {
+		got, err := s.GetBlob(b.Hash)
+		require.NoError(t, err, b.Hash)
+		require.Equal(t, b.Data, got, b.Hash)
+	}
+
+	require.Error(t, s.PutBlobs([]client.Blob{{Hash: "00dd", Data: []byte("x")}, {Hash: "../evil", Data: []byte("x")}}))
+	require.Error(t, s.PutBlobs([]client.Blob{{Hash: "UPPER", Data: []byte("x")}}))
+}

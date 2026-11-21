@@ -25,29 +25,53 @@ import (
 // few bytes per line, the pointers stay small next to the lines
 // themselves, which a (doc, pos, line) table would not.
 
-// putBlob stores data under hash, adding any lines not already stored.
-// A blob already present is left as is (content-addressed: present
-// means identical).
-func putBlob(tx *sql.Tx, hash string, data []byte) error {
+// blobWriter stores blobs in a transaction, with its statements
+// prepared once for however many blobs it stores.
+type blobWriter struct {
+	exists, lookup, insertLine, insertDoc *sql.Stmt
+}
+
+func newBlobWriter(tx *sql.Tx) (*blobWriter, error) {
+	w := &blobWriter{}
+	for _, p := range []struct {
+		stmt  **sql.Stmt
+		query string
+	}{
+		{&w.exists, `SELECT 1 FROM corpus_docs WHERE hash = ?`},
+		{&w.lookup, `SELECT id FROM corpus_lines WHERE hash = ?`},
+		{&w.insertLine, `INSERT INTO corpus_lines (hash, data) VALUES (?, ?)`},
+		{&w.insertDoc, `INSERT INTO corpus_docs (hash, line_ids) VALUES (?, ?)`},
+	} {
+		stmt, err := tx.Prepare(p.query)
+		if err != nil {
+			w.close()
+			return nil, err
+		}
+		*p.stmt = stmt
+	}
+	return w, nil
+}
+
+func (w *blobWriter) close() {
+	for _, s := range []*sql.Stmt{w.exists, w.lookup, w.insertLine, w.insertDoc} {
+		if s != nil {
+			s.Close()
+		}
+	}
+}
+
+// put stores data under hash, adding any lines not already stored. A
+// blob already present is left as is (content-addressed: present means
+// identical).
+func (w *blobWriter) put(hash string, data []byte) error {
 	var exists int
-	err := tx.QueryRow(`SELECT 1 FROM corpus_docs WHERE hash = ?`, hash).Scan(&exists)
+	err := w.exists.QueryRow(hash).Scan(&exists)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-
-	lookup, err := tx.Prepare(`SELECT id FROM corpus_lines WHERE hash = ?`)
-	if err != nil {
-		return err
-	}
-	defer lookup.Close()
-	insert, err := tx.Prepare(`INSERT INTO corpus_lines (hash, data) VALUES (?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer insert.Close()
 
 	var ids []byte
 	for line := range bytes.SplitSeq(data, []byte("\n")) {
@@ -57,9 +81,9 @@ func putBlob(tx *sql.Tx, hash string, data []byte) error {
 		sum := sha256.Sum256(line)
 
 		var id int64
-		err := lookup.QueryRow(sum[:]).Scan(&id)
+		err := w.lookup.QueryRow(sum[:]).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
-			res, err := insert.Exec(sum[:], line)
+			res, err := w.insertLine.Exec(sum[:], line)
 			if err != nil {
 				return err
 			}
@@ -72,7 +96,7 @@ func putBlob(tx *sql.Tx, hash string, data []byte) error {
 		ids = binary.AppendUvarint(ids, uint64(id))
 	}
 
-	_, err = tx.Exec(`INSERT INTO corpus_docs (hash, line_ids) VALUES (?, ?)`, hash, ids)
+	_, err = w.insertDoc.Exec(hash, ids)
 	return err
 }
 

@@ -179,9 +179,20 @@ type Store struct {
 
 var _ client.Store = (*Store)(nil)
 
+// PutBlob stores one blob; see PutBlobs.
 func (s *Store) PutBlob(hash string, data []byte) error {
-	if len(hash) < 2 || !isLowerHex(hash) {
-		return fmt.Errorf("sqlitestore: invalid blob hash %q", hash)
+	return s.PutBlobs([]client.Blob{{Hash: hash, Data: data}})
+}
+
+// PutBlobs stores blobs in one transaction, so a batch costs one commit.
+func (s *Store) PutBlobs(blobs []client.Blob) error {
+	for _, b := range blobs {
+		if len(b.Hash) < 2 || !isLowerHex(b.Hash) {
+			return fmt.Errorf("sqlitestore: invalid blob hash %q", b.Hash)
+		}
+	}
+	if len(blobs) == 0 {
+		return nil
 	}
 
 	tx, err := s.d.db.Begin()
@@ -190,14 +201,27 @@ func (s *Store) PutBlob(hash string, data []byte) error {
 	}
 	defer tx.Rollback()
 
+	w, err := newBlobWriter(tx)
+	if err != nil {
+		return err
+	}
+	defer w.close()
+	claim, err := tx.Prepare(`INSERT OR IGNORE INTO corpus_feed_docs (feed, hash) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer claim.Close()
+
 	// Content-addressed: present means identical, and blobs are never
 	// deleted while a feed holds them (superseded revisions are
 	// retained history).
-	if err := putBlob(tx, hash, data); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO corpus_feed_docs (feed, hash) VALUES (?, ?)`, s.feed, hash); err != nil {
-		return err
+	for _, b := range blobs {
+		if err := w.put(b.Hash, b.Data); err != nil {
+			return err
+		}
+		if _, err := claim.Exec(s.feed, b.Hash); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()

@@ -25,6 +25,15 @@ func TestState(t *testing.T) {
 	})
 }
 
+func TestBlobs(t *testing.T) {
+	storetest.TestBlobs(t, func(t *testing.T) client.Store {
+		db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { db.Close() })
+		return db.Feed("s")
+	})
+}
+
 func TestStoreContract(t *testing.T) {
 	db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "corpus.db"))
 	require.NoError(t, err)

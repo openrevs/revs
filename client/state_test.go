@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -145,4 +146,62 @@ func (f *flakyStore) UpdateState(ch client.StateChange) error {
 		return errFlaky
 	}
 	return f.Store.UpdateState(ch)
+}
+
+// countingStore counts PutBlobs calls.
+type countingStore struct {
+	client.Store
+	puts int
+}
+
+func (c *countingStore) PutBlobs(blobs []client.Blob) error {
+	c.puts++
+	return c.Store.PutBlobs(blobs)
+}
+
+// A sync stores what it brings in batches, and ends up with all of it
+// however many batches that takes.
+func TestSyncStoresInBatches(t *testing.T) {
+	defer client.SetBlobBatch(2, 1<<20)()
+	s, ts := startServer(t)
+	ctx := context.Background()
+
+	pusher := newClient(t, ts.URL)
+	var keys []ed25519.PrivateKey
+	for i := range 7 {
+		k := newKey(t)
+		keys = append(keys, k)
+		_, err := pusher.Push(ctx, k, content(k, fmt.Sprintf("T%d", i)))
+		require.NoError(t, err)
+	}
+	cut(t, s)
+
+	db, err := sqlitestore.Open(filepath.Join(t.TempDir(), "c.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	store := &countingStore{Store: db.Feed("f")}
+	c := client.New(ts.URL, store)
+	res, err := c.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, res.Changed, 7)
+	require.Equal(t, 4, store.puts, "7 documents, 2 at a time")
+	requireSaved(t, c, ts.URL, db.Feed("f"))
+
+	// New revisions arrive as patches against the stored documents.
+	store.puts = 0
+	for i, k := range keys[:5] {
+		_, err := pusher.Push(ctx, k, content(k, fmt.Sprintf("T%d", i), "more"))
+		require.NoError(t, err)
+	}
+	cut(t, s)
+	res, err = c.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, res.Changed, 5)
+	require.Equal(t, 3, store.puts)
+	requireSaved(t, c, ts.URL, db.Feed("f"))
+	for _, k := range keys[:5] {
+		d, err := c.Document(revkeys.UserID(k.Public().(ed25519.PublicKey)))
+		require.NoError(t, err)
+		require.Equal(t, 2, d.Rev)
+	}
 }

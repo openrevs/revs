@@ -38,6 +38,16 @@ func (s *Store) blobPath(hash string) (string, error) {
 	return filepath.Join(s.root, "docs", hash[:2], hash), nil
 }
 
+// PutBlobs stores each blob as its own file.
+func (s *Store) PutBlobs(blobs []client.Blob) error {
+	for _, b := range blobs {
+		if err := s.PutBlob(b.Hash, b.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) PutBlob(hash string, data []byte) error {
 	path, err := s.blobPath(hash)
 	if err != nil {
