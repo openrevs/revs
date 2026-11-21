@@ -35,6 +35,8 @@ scale; each is dated by its timestamp.
 
 Commands:
   export   write each user's signed ratingset to a directory
+  replay   push the users' ratings to a server over time, measuring
+           uploads, epoch cuts and a subscriber's syncs
 
 Run "revs-seed COMMAND -h" for a command's flags.
 `
@@ -52,7 +54,7 @@ Flags:
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stderr); err != nil {
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if !errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(os.Stderr, "revs-seed:", err)
 		}
@@ -60,7 +62,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, stderr io.Writer) error {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return flag.ErrHelp
@@ -68,6 +70,8 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	switch args[0] {
 	case "export":
 		return export(ctx, args[1:], stderr)
+	case "replay":
+		return replay(ctx, args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stderr, usage)
 		return flag.ErrHelp
